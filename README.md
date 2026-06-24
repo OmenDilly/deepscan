@@ -16,7 +16,10 @@ DaisyDisk, and CleanMyMac alike.
 ## Install
 
 ```sh
-# installs the `deepscan` binary (needs Rust via rustup.rs; macOS only)
+# Homebrew (macOS)
+brew install OmenDilly/deepscan/deepscan
+
+# or with cargo (needs Rust via rustup.rs)
 cargo install --git https://github.com/OmenDilly/deepscan deepscan-cli
 ```
 
