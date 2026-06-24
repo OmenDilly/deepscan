@@ -1,9 +1,12 @@
-//! Shared result types and formatting helpers.
+//! Shared result types and formatting helpers. All are `Serialize` so the CLI
+//! can emit `--json` straight from the engine output.
 
 use std::path::PathBuf;
 
+use serde::Serialize;
+
 /// Size of one immediate child of a scanned root (the "where did it go" view).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ChildSize {
     pub name: String,
     pub path: PathBuf,
@@ -11,16 +14,21 @@ pub struct ChildSize {
 }
 
 /// A known reclaimable location (the broad, every-Mac coverage).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Bucket {
     pub name: String,
     pub category: String,
     pub path: PathBuf,
     pub bytes: u64,
     pub note: String,
+    /// Safe for `reclaim --apply` to delete automatically (regenerable, not
+    /// user data). User files (Downloads) and things you might need
+    /// (Archives, simulator devices) are `false` — shown but never auto-deleted.
+    pub safe_auto: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Severity {
     Info,
     Warn,
@@ -28,7 +36,7 @@ pub enum Severity {
 }
 
 /// A leak/anomaly flagged by a signature whose path exceeded its baseline.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Finding {
     pub name: String,
     pub description: String,
@@ -41,6 +49,18 @@ pub struct Finding {
     pub prevention: Option<String>,
     pub safe_delete: String,
     pub file_matches: Option<u64>,
+}
+
+/// The full result of a `scan` — the JSON payload, and the source the human
+/// renderer reads from.
+#[derive(Debug, Clone, Serialize)]
+pub struct ScanReport {
+    pub root: PathBuf,
+    pub total_bytes: u64,
+    pub children: Vec<ChildSize>,
+    pub reclaimable_bytes: u64,
+    pub buckets: Vec<Bucket>,
+    pub findings: Vec<Finding>,
 }
 
 /// Human-readable byte size, e.g. `161.4 GB`.

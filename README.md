@@ -17,6 +17,10 @@ DaisyDisk, and CleanMyMac alike.
 cargo run --release -- scan          # scan your home directory
 cargo run --release -- scan /        # scan from the volume root (run with sudo for shadow zones)
 cargo run --release -- scan ~/Library/Developer --top 20
+cargo run --release -- scan --json | jq .   # machine-readable, for scripts/CI
+
+cargo run --release -- reclaim       # dry run: what's safe to free (deletes nothing)
+cargo run --release -- reclaim --apply       # free regenerable caches (asks first)
 ```
 
 ## What it reports
@@ -54,16 +58,28 @@ the portable backend (handy for A/B benchmarking, or as a safety valve).
 
 - [x] `getattrlistbulk(2)` fast path — one syscall per directory instead of
       one stat per file.
+- [x] `--json` output and a guarded `reclaim --apply` mode.
 - [ ] Baseline learning — compare against a community median per directory,
       not just a static ceiling.
-- [ ] `--json` output and an `--apply` guarded reclaim mode.
 - [ ] Swift menu-bar app over the shared core.
 
 ## Safety
 
-deepscan **never deletes anything**. It prints reclaim commands for you to
-review and run. Signatures that target system paths note where `sudo` is
-required and call out what must stay intact.
+By default deepscan **never deletes anything** — `scan` is read-only and
+`reclaim` is a dry run. Deletion happens only through the explicit, guarded
+`reclaim --apply`:
+
+- Only **regenerable caches under `$HOME`** are ever auto-deleted. User files
+  (Downloads), app state (simulator devices), cross-project stores (pnpm
+  store), and anything needing `sudo` (system leak paths) are listed as
+  **Manual** and never touched automatically.
+- A safety guard refuses the filesystem root, near-root paths, the home
+  directory itself, and any path containing `..`.
+- `--apply` prompts for confirmation; pass `--yes` to skip it in scripts — and
+  it refuses to run unattended (piped) without `--yes`.
+
+Leak signatures that target system paths print the `sudo` command for you to
+review and run, and call out what must stay intact.
 
 ## License
 

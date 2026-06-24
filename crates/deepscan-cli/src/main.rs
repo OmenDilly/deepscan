@@ -1,16 +1,15 @@
 //! deepscan — fast macOS disk forensics.
 //!
-//! `deepscan scan [PATH]` prints three sections:
-//!   1. where the space is (top children of the root)
-//!   2. reclaimable buckets (broad, every-Mac coverage)
-//!   3. leak signatures (anomalies above baseline, with root cause + fix)
+//!   deepscan scan [PATH] [--json]      where space is + reclaimable + leaks
+//!   deepscan reclaim [--apply] [--yes] guarded cleanup of regenerable caches
 
-use std::path::{Path, PathBuf};
+use std::io::{IsTerminal, Write};
+use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use deepscan_core::{
-    default_catalog, default_signatures, evaluate_catalog, evaluate_signatures, human,
-    load_signatures, scan_children, Severity,
+    build_reclaim_plan, build_report, default_signatures, execute_reclaim, home_dir, human,
+    load_signatures, ReclaimPlan, ScanReport, Severity,
 };
 
 #[derive(Parser)]
@@ -39,65 +38,82 @@ enum Commands {
         /// Skip the broad child-size breakdown.
         #[arg(long)]
         no_tree: bool,
+        /// Emit machine-readable JSON instead of the formatted report.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Reclaim regenerable caches. Dry-run unless --apply is passed.
+    Reclaim {
+        /// Actually delete (default is a dry run that deletes nothing).
+        #[arg(long)]
+        apply: bool,
+        /// Skip the confirmation prompt (required with --apply when piped).
+        #[arg(long)]
+        yes: bool,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
     },
 }
 
 const BOLD: &str = "\x1b[1m";
 const DIM: &str = "\x1b[2m";
 const RED: &str = "\x1b[31m";
+const GREEN: &str = "\x1b[32m";
 const YELLOW: &str = "\x1b[33m";
 const CYAN: &str = "\x1b[36m";
 const RESET: &str = "\x1b[0m";
 
 fn home() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/"))
+    home_dir().unwrap_or_else(|| PathBuf::from("/"))
 }
 
 fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
-    match cli.command {
+    match Cli::parse().command {
         Commands::Scan {
             path,
             top,
             signatures,
             no_tree,
+            json,
         } => {
             let root = path.unwrap_or_else(home);
-            run_scan(&root, top, signatures.as_deref(), no_tree)
+            let signatures = match signatures {
+                Some(path) => load_signatures(&path)?,
+                None => default_signatures(),
+            };
+            let report = build_report(&root, top, !no_tree, &signatures)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                render_scan(&report);
+            }
+            Ok(())
         }
+        Commands::Reclaim { apply, yes, json } => run_reclaim(apply, yes, json),
     }
 }
 
-fn run_scan(
-    root: &Path,
-    top: usize,
-    signatures_path: Option<&Path>,
-    no_tree: bool,
-) -> anyhow::Result<()> {
-    println!("{BOLD}deepscan{RESET} {DIM}· scanning {}{RESET}", root.display());
+fn render_scan(report: &ScanReport) {
+    println!("{BOLD}deepscan{RESET} {DIM}· scanning {}{RESET}", report.root.display());
 
-    if !no_tree {
-        let (total, children) = scan_children(root)?;
+    if !report.children.is_empty() {
         println!(
             "\n{BOLD}Where the space is{RESET} {DIM}(total {}){RESET}",
-            human(total)
+            human(report.total_bytes)
         );
-        for child in children.iter().take(top).filter(|c| c.bytes > 0) {
+        for child in &report.children {
             println!("  {:>11}  {}", human(child.bytes), child.name);
         }
     }
 
-    let buckets = evaluate_catalog(&default_catalog());
-    if !buckets.is_empty() {
-        let reclaimable: u64 = buckets.iter().map(|b| b.bytes).sum();
+    if !report.buckets.is_empty() {
         println!(
             "\n{BOLD}Reclaimable buckets{RESET} {DIM}({} across {} locations){RESET}",
-            human(reclaimable),
-            buckets.len()
+            human(report.reclaimable_bytes),
+            report.buckets.len()
         );
-        for bucket in &buckets {
+        for bucket in &report.buckets {
             println!(
                 "  {:>11}  {CYAN}{}{RESET} {DIM}— {}{RESET}",
                 human(bucket.bytes),
@@ -107,17 +123,11 @@ fn run_scan(
         }
     }
 
-    let signatures = match signatures_path {
-        Some(path) => load_signatures(path)?,
-        None => default_signatures(),
-    };
-    let findings = evaluate_signatures(&signatures);
-
     println!("\n{BOLD}Leak signatures{RESET}");
-    if findings.is_empty() {
+    if report.findings.is_empty() {
         println!("  {DIM}no anomalies above baseline — clean{RESET}");
     } else {
-        for finding in &findings {
+        for finding in &report.findings {
             let (color, tag) = match finding.severity {
                 Severity::Critical => (RED, "CRIT"),
                 Severity::Warn => (YELLOW, "WARN"),
@@ -145,6 +155,106 @@ fn run_scan(
             println!("      reclaim:  {}", finding.safe_delete);
         }
     }
+}
 
+fn run_reclaim(apply: bool, yes: bool, json: bool) -> anyhow::Result<()> {
+    let plan = build_reclaim_plan();
+
+    if !apply {
+        if json {
+            println!("{}", serde_json::to_string_pretty(&plan)?);
+        } else {
+            render_plan(&plan, true);
+        }
+        return Ok(());
+    }
+
+    // --apply: confirm before deleting.
+    if plan.auto_targets.is_empty() {
+        if !json {
+            println!("{DIM}Nothing safe to reclaim.{RESET}");
+        }
+        return Ok(());
+    }
+
+    if !yes {
+        if !std::io::stdin().is_terminal() {
+            anyhow::bail!("refusing to delete without confirmation — re-run with --apply --yes");
+        }
+        if !json {
+            render_plan(&plan, false);
+        }
+        print!(
+            "\nDelete {} of regenerable caches? [y/N] ",
+            human(plan.auto_bytes)
+        );
+        std::io::stdout().flush().ok();
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer)?;
+        if !matches!(answer.trim(), "y" | "Y" | "yes") {
+            println!("Aborted. Nothing deleted.");
+            return Ok(());
+        }
+    }
+
+    let result = execute_reclaim(&plan.auto_targets, home_dir().as_deref());
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    } else {
+        println!("\n{BOLD}deepscan reclaim{RESET} {DIM}· applying{RESET}");
+        for outcome in &result.deleted {
+            if outcome.ok {
+                println!("  {GREEN}freed{RESET}  {:>11}  {}", human(outcome.bytes), outcome.name);
+            } else {
+                let err = outcome.error.as_deref().unwrap_or("failed");
+                println!("  {RED}skip{RESET}   {:>11}  {} {DIM}({err}){RESET}", human(outcome.bytes), outcome.name);
+            }
+        }
+        println!("\n{BOLD}Reclaimed {}{RESET}", human(result.freed_bytes));
+    }
     Ok(())
+}
+
+fn render_plan(plan: &ReclaimPlan, with_hint: bool) {
+    println!(
+        "{BOLD}deepscan reclaim{RESET} {DIM}· dry run (nothing deleted){RESET}"
+    );
+
+    if plan.auto_targets.is_empty() {
+        println!("\n{DIM}Nothing safe to reclaim automatically.{RESET}");
+    } else {
+        println!(
+            "\n{BOLD}Safe to reclaim{RESET} {DIM}({} across {} targets){RESET}",
+            human(plan.auto_bytes),
+            plan.auto_targets.len()
+        );
+        for target in &plan.auto_targets {
+            println!(
+                "  {GREEN}{:>11}{RESET}  {}  {DIM}— {}{RESET}",
+                human(target.bytes),
+                target.name,
+                target.note
+            );
+        }
+    }
+
+    if !plan.manual_targets.is_empty() {
+        println!("\n{BOLD}Manual{RESET} {DIM}— review and handle yourself{RESET}");
+        for target in &plan.manual_targets {
+            println!(
+                "  {:>11}  {}  {DIM}— {}{RESET}",
+                human(target.bytes),
+                target.name,
+                target.note
+            );
+        }
+    }
+
+    if with_hint && !plan.auto_targets.is_empty() {
+        println!(
+            "\n{DIM}Run{RESET} deepscan reclaim --apply {DIM}to free the {} of safe targets.{RESET}",
+            human(plan.auto_bytes)
+        );
+    }
 }

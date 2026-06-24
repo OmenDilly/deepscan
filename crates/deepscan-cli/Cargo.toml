@@ -13,4 +13,5 @@ path = "src/main.rs"
 [dependencies]
 deepscan-core = { path = "../deepscan-core" }
 clap = { version = "4", features = ["derive"] }
+serde_json = "1"
 anyhow = "1"
