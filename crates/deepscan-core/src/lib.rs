@@ -19,7 +19,9 @@ pub use engine::{
     ReclaimPlan, ReclaimResult, ReclaimTarget,
 };
 pub use report::{human, Bucket, ChildSize, Finding, ScanReport, Severity, TreeNode};
-pub use scan::{build_tree, count_matching_files, measure_path, scan_children};
+pub use scan::{
+    build_tree, count_matching_files, measure_path, progress, reset_progress, scan_children,
+};
 pub use signatures::{
     default_signatures, evaluate_signatures, load_signatures, parse_signatures, Signature,
 };

@@ -9,8 +9,8 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use deepscan_core::{
     analyze_container, build_reclaim_plan, build_report, default_signatures, default_zones,
-    detect_anomalies, execute_reclaim, home_dir, human, load_signatures, ReclaimPlan, ScanReport,
-    Severity, TreeNode,
+    detect_anomalies, execute_reclaim, home_dir, human, load_signatures, progress, reset_progress,
+    ReclaimPlan, ScanReport, Severity, TreeNode,
 };
 
 #[derive(Parser)]
@@ -26,22 +26,24 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Scan a directory tree: reclaimable space + leak signatures.
+    /// Scan for reclaimable space + leaks (fast). Add --tree to also walk the
+    /// whole tree and show where space went.
     Scan {
         /// Root to scan (default: your home directory).
         path: Option<PathBuf>,
-        /// Show the top N largest children.
+        /// Show the top N largest children (with --tree / --depth).
         #[arg(long, default_value_t = 12)]
         top: usize,
-        /// Nesting depth of the size tree (1 = flat top level).
-        #[arg(long, default_value_t = 1)]
+        /// Walk the full tree to show where space went, to this depth.
+        /// 0 (default) skips the slow full-home walk; N >= 1 implies --tree.
+        #[arg(long, default_value_t = 0)]
         depth: usize,
+        /// Show "where the space is" — walks the whole tree (slower).
+        #[arg(long)]
+        tree: bool,
         /// Use a custom signatures file instead of the built-in set.
         #[arg(long)]
         signatures: Option<PathBuf>,
-        /// Skip the broad child-size breakdown.
-        #[arg(long)]
-        no_tree: bool,
         /// Emit machine-readable JSON instead of the formatted report.
         #[arg(long)]
         json: bool,
@@ -81,14 +83,65 @@ fn home() -> PathBuf {
     home_dir().unwrap_or_else(|| PathBuf::from("/"))
 }
 
+/// Run `work` on a worker thread while animating a live progress line on
+/// stderr (TTY only — `--json` on stdout stays clean, pipes/CI stay quiet).
+fn with_spinner<T, F>(label: &str, work: F) -> T
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let show = std::io::stderr().is_terminal();
+    reset_progress();
+
+    let (tx, rx) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let _ = tx.send(work());
+    });
+
+    const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    let mut frame = 0usize;
+    let value = loop {
+        match rx.recv_timeout(Duration::from_millis(120)) {
+            Ok(value) => break value,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if show {
+                    let (dirs, bytes) = progress();
+                    eprint!(
+                        "\r\x1b[2K{} {label}… {} scanned · {} dirs",
+                        FRAMES[frame % FRAMES.len()],
+                        human(bytes),
+                        dirs
+                    );
+                    let _ = std::io::stderr().flush();
+                    frame += 1;
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                worker.join().expect("scan worker panicked");
+                unreachable!("worker disconnected without panicking");
+            }
+        }
+    };
+
+    let _ = worker.join();
+    if show {
+        eprint!("\r\x1b[2K");
+        let _ = std::io::stderr().flush();
+    }
+    value
+}
+
 fn main() -> anyhow::Result<()> {
     match Cli::parse().command {
         Commands::Scan {
             path,
             top,
             depth,
+            tree,
             signatures,
-            no_tree,
             json,
         } => {
             let root = path.unwrap_or_else(home);
@@ -96,8 +149,12 @@ fn main() -> anyhow::Result<()> {
                 Some(path) => load_signatures(&path)?,
                 None => default_signatures(),
             };
-            let depth = depth.clamp(1, 6);
-            let report = build_report(&root, top, !no_tree, depth, &signatures)?;
+            let depth = if tree { depth.max(1) } else { depth };
+            let depth = depth.min(6);
+            let include_tree = depth >= 1;
+            let report = with_spinner("scanning", move || {
+                build_report(&root, top, include_tree, depth, &signatures)
+            })?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
@@ -112,12 +169,12 @@ fn main() -> anyhow::Result<()> {
 
 fn run_anomalies(path: Option<PathBuf>, json: bool) -> anyhow::Result<()> {
     let anomalies = match path {
-        Some(path) => {
+        Some(path) => with_spinner("analyzing", move || {
             let mut found = analyze_container("custom", &path, 100 * 1024 * 1024);
             found.sort_by_key(|anomaly| std::cmp::Reverse(anomaly.bytes));
             found
-        }
-        None => detect_anomalies(&default_zones()),
+        }),
+        None => with_spinner("analyzing zones", || detect_anomalies(&default_zones())),
     };
 
     if json {
@@ -186,6 +243,11 @@ fn render_scan(report: &ScanReport) {
         for child in &report.children {
             println!("  {:>11}  {}", human(child.bytes), child.name);
         }
+    } else {
+        println!(
+            "\n{DIM}Tip: add --tree (or --depth N) to see where all your space went — \
+             it walks the whole tree, so it's slower.{RESET}"
+        );
     }
 
     if !report.buckets.is_empty() {
@@ -258,7 +320,7 @@ fn print_tree(node: &TreeNode, indent: usize, threshold: u64) {
 }
 
 fn run_reclaim(apply: bool, yes: bool, json: bool) -> anyhow::Result<()> {
-    let plan = build_reclaim_plan();
+    let plan = with_spinner("scanning reclaimable", build_reclaim_plan);
 
     if !apply {
         if json {

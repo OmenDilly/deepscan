@@ -26,26 +26,31 @@ as shown below.
 ## Quick start
 
 ```sh
-cargo run --release -- scan          # scan your home directory
-cargo run --release -- scan /        # scan from the volume root (run with sudo for shadow zones)
-cargo run --release -- scan ~/Library/Developer --top 20
-cargo run --release -- scan ~/Library/Developer --depth 3   # nested size tree
-cargo run --release -- scan --json | jq .   # machine-readable, for scripts/CI
+deepscan scan                 # fast (~seconds): reclaimable space + leak signatures
+deepscan scan --tree          # also walk the whole tree — where did the space go?
+deepscan scan ~/Library/Developer --depth 3   # nested size tree of a directory
+deepscan scan --json | jq .   # machine-readable, for scripts/CI
 
-cargo run --release -- anomalies     # find UNKNOWN leaks: outliers vs sibling median
-cargo run --release -- anomalies "$TMPDIR"   # analyze any one directory's children
+deepscan anomalies            # find UNKNOWN leaks: outliers vs sibling median
+deepscan anomalies "$TMPDIR"  # analyze any one directory's children
 
-cargo run --release -- reclaim       # dry run: what's safe to free (deletes nothing)
-cargo run --release -- reclaim --apply       # free regenerable caches (asks first)
+deepscan reclaim              # dry run: what's safe to free (deletes nothing)
+deepscan reclaim --apply      # free regenerable caches (asks first)
 ```
+
+> `scan` is fast by default because the full "where did it go" tree walk
+> traverses *every* file under the root (millions, on a dev machine — a
+> `du`-level operation). It's opt-in via `--tree` / `--depth`, and shows a live
+> progress spinner while it runs.
 
 ## What it reports
 
-1. **Where the space is** — the largest children of the scanned root.
-2. **Reclaimable buckets** — known caches (Xcode, npm/yarn/pnpm/cargo/go,
+1. **Reclaimable buckets** — known caches (Xcode, npm/yarn/pnpm/cargo/go,
    CocoaPods, Trash, …), always sized.
-3. **Leak signatures** — *known* leaks above a baseline, each with owner, root
+2. **Leak signatures** — *known* leaks above a baseline, each with owner, root
    cause, prevention, and a safe reclaim command (printed, never auto-run).
+3. **Where the space is** (`--tree` / `--depth N`) — a nested size tree of the
+   scanned root. Opt-in, since it walks every file under the root.
 4. **Anomalies** (`deepscan anomalies`) — *unknown* leaks: directories that are
    size outliers vs their siblings' learned median. Catches the next
    idleassetsd-style leak with no signature written for it.

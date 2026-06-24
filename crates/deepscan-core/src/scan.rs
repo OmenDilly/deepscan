@@ -38,6 +38,24 @@ struct LiteEntry {
     kind: EntryKind,
 }
 
+/// Live progress counters, read by the CLI spinner. Reset before each scan.
+pub static SCANNED_BYTES: AtomicU64 = AtomicU64::new(0);
+pub static SCANNED_DIRS: AtomicU64 = AtomicU64::new(0);
+
+/// Zero the progress counters before starting a scan.
+pub fn reset_progress() {
+    SCANNED_BYTES.store(0, Ordering::Relaxed);
+    SCANNED_DIRS.store(0, Ordering::Relaxed);
+}
+
+/// Current progress as `(dirs_scanned, bytes_scanned)`.
+pub fn progress() -> (u64, u64) {
+    (
+        SCANNED_DIRS.load(Ordering::Relaxed),
+        SCANNED_BYTES.load(Ordering::Relaxed),
+    )
+}
+
 /// Total apparent size (sum of file lengths) of everything under `path`.
 pub fn measure_path(path: &Path) -> u64 {
     let meta = match fs::symlink_metadata(path) {
@@ -72,8 +90,10 @@ fn sum_dir<'scope>(dir: PathBuf, total: &'scope AtomicU64, scope: &Scope<'scope>
             EntryKind::Skip => {}
         }
     }
+    SCANNED_DIRS.fetch_add(1, Ordering::Relaxed);
     if local > 0 {
         total.fetch_add(local, Ordering::Relaxed);
+        SCANNED_BYTES.fetch_add(local, Ordering::Relaxed);
     }
 }
 
@@ -178,19 +198,37 @@ pub fn build_tree(path: &Path, depth: usize) -> TreeNode {
 }
 
 /// Size every immediate child of `root`, returning `(total, children desc)`.
+///
+/// All children are sized inside a single `rayon::scope`, so the whole tree is
+/// walked with maximum parallelism (no per-child ramp-up/drain that would leave
+/// cores idle).
 pub fn scan_children(root: &Path) -> io::Result<(u64, Vec<ChildSize>)> {
     let entries: Vec<_> = fs::read_dir(root)?.filter_map(Result::ok).collect();
+    let counters: Vec<AtomicU64> = entries.iter().map(|_| AtomicU64::new(0)).collect();
+
+    rayon::scope(|scope| {
+        for (entry, counter) in entries.iter().zip(counters.iter()) {
+            let path = entry.path();
+            match fs::symlink_metadata(&path) {
+                Ok(meta) if meta.file_type().is_symlink() => {}
+                Ok(meta) if meta.file_type().is_dir() => {
+                    scope.spawn(move |inner| sum_dir(path, counter, inner));
+                }
+                Ok(meta) if meta.file_type().is_file() => {
+                    counter.store(meta.len(), Ordering::Relaxed);
+                }
+                _ => {}
+            }
+        }
+    });
 
     let mut children: Vec<ChildSize> = entries
         .iter()
-        .map(|entry| {
-            let path = entry.path();
-            let bytes = measure_path(&path);
-            ChildSize {
-                name: entry.file_name().to_string_lossy().into_owned(),
-                path,
-                bytes,
-            }
+        .zip(counters.iter())
+        .map(|(entry, counter)| ChildSize {
+            name: entry.file_name().to_string_lossy().into_owned(),
+            path: entry.path(),
+            bytes: counter.load(Ordering::Relaxed),
         })
         .collect();
 
