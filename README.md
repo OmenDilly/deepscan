@@ -13,6 +13,16 @@ DaisyDisk, and CleanMyMac alike.
 > leaked it, whether that's abnormal, how to reclaim it safely, and how to
 > stop it coming back.*
 
+## Install
+
+```sh
+# installs the `deepscan` binary (needs Rust via rustup.rs; macOS only)
+cargo install --git https://github.com/OmenDilly/deepscan deepscan-cli
+```
+
+Then `deepscan scan` works anywhere. To hack on it, clone and use `cargo run`
+as shown below.
+
 ## Quick start
 
 ```sh
