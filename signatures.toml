@@ -1,0 +1,58 @@
+# deepscan signatures — leak / anomaly detectors.
+#
+# Each [[signature]] fires ONLY when its path exceeds baseline_mb, so it
+# reports a *leak*, not just a big folder. Signatures are data: add a new
+# [[signature]] block to teach deepscan a new leak. Community PRs welcome.
+#
+# Fields:
+#   name         required  short title
+#   path         required  dir to measure (supports ~, $VARS, * globs)
+#   baseline_mb  required  healthy ceiling; fires above this
+#   description  optional  one line
+#   file_pattern optional  glob; counts matching files (evidence)
+#   owner        optional  responsible daemon / bundle id
+#   severity     optional  critical | warn | info (else inferred from ratio)
+#   root_cause   optional  why it grows
+#   prevention   optional  how to stop recurrence
+#   safe_delete  optional  reclaim command (shown, never auto-run)
+
+[[signature]]
+name = "idleassetsd aerial wallpaper leak"
+description = "Wallpaper/screensaver downloader hoarding partial 4K downloads"
+path = "/private/var/folders/*/*/*/com.apple.idleassetsd"
+file_pattern = "CFNetworkDownload_*.tmp"
+owner = "com.apple.idleassetsd"
+baseline_mb = 500
+severity = "critical"
+root_cause = "Aerial/dynamic wallpaper or screensaver re-downloading 4K assets that never finish"
+prevention = "System Settings -> Wallpaper: pick a static image; Screen Saver: avoid Aerial videos"
+safe_delete = "sudo rm -rf /private/var/folders/*/*/*/com.apple.idleassetsd   # partial downloads only; real wallpapers live in /Library/Application Support"
+
+[[signature]]
+name = "Xcode DerivedData bloat"
+description = "Stale build intermediates and indexes across projects"
+path = "~/Library/Developer/Xcode/DerivedData"
+owner = "com.apple.dt.Xcode"
+baseline_mb = 8000
+severity = "warn"
+root_cause = "Build output accumulates per project and is never auto-pruned"
+prevention = "Xcode -> Settings -> Locations -> Derived Data; clear periodically"
+
+[[signature]]
+name = "Simulator runtime caches"
+description = "CoreSimulator caches and stale downloaded runtimes"
+path = "~/Library/Developer/CoreSimulator/Caches"
+owner = "com.apple.CoreSimulator"
+baseline_mb = 4000
+severity = "warn"
+root_cause = "Downloaded simulator runtime images and asset caches"
+prevention = "xcrun simctl delete unavailable; remove unused runtimes"
+
+[[signature]]
+name = "User cache sprawl"
+description = "~/Library/Caches grown unusually large"
+path = "~/Library/Caches"
+baseline_mb = 10000
+severity = "info"
+root_cause = "Per-app caches accumulating (browsers, build tools, media thumbnails)"
+prevention = "Safe to clear; apps rebuild caches on next launch"
