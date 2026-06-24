@@ -13,3 +13,7 @@ toml = "0.8"
 glob = "0.3"
 shellexpand = "3"
 anyhow = "1"
+
+# macOS fast path: getattrlistbulk(2) — one syscall per directory.
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"

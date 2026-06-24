@@ -40,10 +40,20 @@ The leak rules live in [`signatures.toml`](signatures.toml). Add a
   menu-bar app can reuse the exact same fast core via a C ABI.
 - `deepscan-cli` — the `deepscan` binary.
 
+## Performance
+
+The scanner is a `rayon::scope` parallel walk. On macOS each directory is
+listed with **`getattrlistbulk(2)`** — one syscall returns every child's name,
+type, and size, replacing the per-file `stat()` loop. Measured vs the portable
+`stat` backend (identical totals, so it's a pure speedup): **~13% faster on
+directory-dense trees, ~20–35% on file-dense ones**; the win scales with
+files-per-directory and with a cold cache. Set `DEEPSCAN_NO_BULK=1` to force
+the portable backend (handy for A/B benchmarking, or as a safety valve).
+
 ## Roadmap
 
-- [ ] `getattrlistbulk(2)` fast path — one syscall per directory instead of
-      one stat per file (the "instant" unlock).
+- [x] `getattrlistbulk(2)` fast path — one syscall per directory instead of
+      one stat per file.
 - [ ] Baseline learning — compare against a community median per directory,
       not just a static ceiling.
 - [ ] `--json` output and an `--apply` guarded reclaim mode.
