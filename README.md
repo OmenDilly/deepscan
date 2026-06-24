@@ -43,6 +43,17 @@ deepscan reclaim --apply      # free regenerable caches (asks first)
 > `du`-level operation). It's opt-in via `--tree` / `--depth`, and shows a live
 > progress spinner while it runs.
 
+## Commands
+
+| Command | What it does |
+|---|---|
+| `deepscan scan [PATH]` | Reclaimable caches + leak signatures (fast). `--tree` / `--depth N` adds the full size tree; `--json` for machine output. |
+| `deepscan anomalies [PATH]` | Unknown-leak detection — directories that are size outliers vs their siblings' learned median. |
+| `deepscan reclaim` | Guarded cleanup of regenerable caches. Dry-run by default; `--apply` (with `--yes`) to delete. |
+
+Run `deepscan help <command>` (or `<command> --help`) for the full flag list.
+Every command supports `--json`.
+
 ## What it reports
 
 1. **Reclaimable buckets** — known caches (Xcode, npm/yarn/pnpm/cargo/go,
