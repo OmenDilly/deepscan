@@ -19,6 +19,9 @@ cargo run --release -- scan /        # scan from the volume root (run with sudo 
 cargo run --release -- scan ~/Library/Developer --top 20
 cargo run --release -- scan --json | jq .   # machine-readable, for scripts/CI
 
+cargo run --release -- anomalies     # find UNKNOWN leaks: outliers vs sibling median
+cargo run --release -- anomalies "$TMPDIR"   # analyze any one directory's children
+
 cargo run --release -- reclaim       # dry run: what's safe to free (deletes nothing)
 cargo run --release -- reclaim --apply       # free regenerable caches (asks first)
 ```
@@ -28,8 +31,11 @@ cargo run --release -- reclaim --apply       # free regenerable caches (asks fir
 1. **Where the space is** — the largest children of the scanned root.
 2. **Reclaimable buckets** — known caches (Xcode, npm/yarn/pnpm/cargo/go,
    CocoaPods, Trash, …), always sized.
-3. **Leak signatures** — anomalies above a baseline, each with owner, root
+3. **Leak signatures** — *known* leaks above a baseline, each with owner, root
    cause, prevention, and a safe reclaim command (printed, never auto-run).
+4. **Anomalies** (`deepscan anomalies`) — *unknown* leaks: directories that are
+   size outliers vs their siblings' learned median. Catches the next
+   idleassetsd-style leak with no signature written for it.
 
 ## Signatures are data, not code
 
@@ -59,8 +65,10 @@ the portable backend (handy for A/B benchmarking, or as a safety valve).
 - [x] `getattrlistbulk(2)` fast path — one syscall per directory instead of
       one stat per file.
 - [x] `--json` output and a guarded `reclaim --apply` mode.
-- [ ] Baseline learning — compare against a community median per directory,
-      not just a static ceiling.
+- [x] Baseline learning (v1) — flag size outliers vs the *learned sibling
+      median*, catching unknown leaks with no signature.
+- [ ] Community baselines — compare against a cross-machine median per
+      directory, not just local siblings.
 - [ ] Swift menu-bar app over the shared core.
 
 ## Safety

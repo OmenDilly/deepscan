@@ -8,8 +8,9 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use deepscan_core::{
-    build_reclaim_plan, build_report, default_signatures, execute_reclaim, home_dir, human,
-    load_signatures, ReclaimPlan, ScanReport, Severity,
+    analyze_container, build_reclaim_plan, build_report, default_signatures, default_zones,
+    detect_anomalies, execute_reclaim, home_dir, human, load_signatures, ReclaimPlan, ScanReport,
+    Severity,
 };
 
 #[derive(Parser)]
@@ -39,6 +40,14 @@ enum Commands {
         #[arg(long)]
         no_tree: bool,
         /// Emit machine-readable JSON instead of the formatted report.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Find size outliers vs sibling directories (learned baselines).
+    Anomalies {
+        /// Analyze one directory's children instead of the default zones.
+        path: Option<PathBuf>,
+        /// Emit machine-readable JSON.
         #[arg(long)]
         json: bool,
     },
@@ -90,8 +99,60 @@ fn main() -> anyhow::Result<()> {
             }
             Ok(())
         }
+        Commands::Anomalies { path, json } => run_anomalies(path, json),
         Commands::Reclaim { apply, yes, json } => run_reclaim(apply, yes, json),
     }
+}
+
+fn run_anomalies(path: Option<PathBuf>, json: bool) -> anyhow::Result<()> {
+    let anomalies = match path {
+        Some(path) => {
+            let mut found = analyze_container("custom", &path, 100 * 1024 * 1024);
+            found.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+            found
+        }
+        None => detect_anomalies(&default_zones()),
+    };
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&anomalies)?);
+        return Ok(());
+    }
+
+    println!(
+        "{BOLD}deepscan anomalies{RESET} {DIM}· size outliers vs sibling median (learned baseline){RESET}"
+    );
+    if anomalies.is_empty() {
+        println!("  {DIM}no outliers — every sibling looks normal{RESET}");
+        return Ok(());
+    }
+    for anomaly in &anomalies {
+        let (color, tag) = match anomaly.severity {
+            Severity::Critical => (RED, "CRIT"),
+            Severity::Warn => (YELLOW, "WARN"),
+            Severity::Info => (DIM, "INFO"),
+        };
+        println!(
+            "  {color}\u{26a0} [{tag}] {}{RESET} {BOLD}{}{RESET} {DIM}in {}{RESET}",
+            anomaly.name,
+            human(anomaly.bytes),
+            anomaly.zone
+        );
+        match anomaly.ratio {
+            Some(ratio) => println!(
+                "      {:.0}\u{00d7} the sibling median ({}) across {} siblings",
+                ratio,
+                human(anomaly.median_bytes),
+                anomaly.siblings
+            ),
+            None => println!(
+                "      lone outlier — sibling median is ~0 across {} siblings",
+                anomaly.siblings
+            ),
+        }
+        println!("      path: {}", anomaly.path.display());
+    }
+    Ok(())
 }
 
 fn render_scan(report: &ScanReport) {

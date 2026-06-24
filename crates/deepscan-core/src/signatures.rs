@@ -56,7 +56,7 @@ pub fn load_signatures(path: &Path) -> anyhow::Result<Vec<Signature>> {
 }
 
 /// Expand `~`/`$VARS` then glob; falls back to a literal path check.
-fn expand_paths(pattern: &str) -> Vec<PathBuf> {
+pub(crate) fn expand_paths(pattern: &str) -> Vec<PathBuf> {
     let expanded = shellexpand::full(pattern)
         .map(|cow| cow.into_owned())
         .unwrap_or_else(|_| pattern.to_string());
