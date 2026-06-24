@@ -56,3 +56,63 @@ baseline_mb = 10000
 severity = "info"
 root_cause = "Per-app caches accumulating (browsers, build tools, media thumbnails)"
 prevention = "Safe to clear; apps rebuild caches on next launch"
+
+[[signature]]
+name = "Docker.raw disk image bloat"
+description = "Docker Desktop's virtual disk grows but never shrinks on its own"
+path = "~/Library/Containers/com.docker.docker/Data/**/Docker.raw"
+owner = "com.docker.docker"
+baseline_mb = 20000
+severity = "warn"
+root_cause = "Image/container/volume layers accumulate; the sparse .raw file only ever grows"
+prevention = "docker system prune -a --volumes; then Docker Desktop -> Troubleshoot -> Clean / Purge data to actually shrink the image"
+
+[[signature]]
+name = "iOS device backups"
+description = "Local iPhone/iPad backups under MobileSync"
+path = "~/Library/Application Support/MobileSync/Backup"
+owner = "com.apple.AMPDevicesAgent"
+baseline_mb = 5000
+severity = "warn"
+root_cause = "Each device backup is kept in full; old device backups are never pruned"
+prevention = "Review in Finder -> device -> Manage Backups (these are real data — delete only stale ones)"
+
+[[signature]]
+name = "DocumentRevisions version store"
+description = "Auto Save / Versions history at the volume root (needs sudo to read)"
+path = "/.DocumentRevisions-V100"
+owner = "com.apple.revisiond"
+baseline_mb = 2000
+severity = "warn"
+root_cause = "revisiond keeps prior versions of auto-saved documents and rarely garbage-collects"
+prevention = "sudo rm -rf /.DocumentRevisions-V100/* lets revisiond rebuild it (lose Versions history)"
+
+[[signature]]
+name = "QuickLook thumbnail cache"
+description = "Finder/QuickLook preview thumbnail cache in the temp store"
+path = "/private/var/folders/*/*/C/com.apple.QuickLook.thumbnailcache"
+owner = "com.apple.quicklook"
+baseline_mb = 1000
+severity = "info"
+root_cause = "Thumbnails for previewed files accumulate without bound"
+prevention = "qlmanage -r cache  (rebuilds automatically)"
+
+[[signature]]
+name = "VM swap and sleepimage"
+description = "Hibernation image plus swapfiles (needs sudo to read)"
+path = "/private/var/vm"
+owner = "kernel"
+baseline_mb = 12000
+severity = "info"
+root_cause = "sleepimage equals installed RAM; swapfiles grow under memory pressure"
+prevention = "Frees on reboot; on a desktop that never hibernates, sudo pmset hibernatemode 0 stops the sleepimage"
+
+[[signature]]
+name = "Homebrew download cache"
+description = "Downloaded bottles and source tarballs"
+path = "~/Library/Caches/Homebrew"
+owner = "sh.brew"
+baseline_mb = 3000
+severity = "info"
+root_cause = "Old formula downloads are kept after upgrades"
+prevention = "brew cleanup --prune=all"
