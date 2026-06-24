@@ -6,6 +6,7 @@
 
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
+use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use deepscan_core::{
@@ -48,6 +49,9 @@ enum Commands {
         /// Emit machine-readable JSON instead of the formatted report.
         #[arg(long)]
         json: bool,
+        /// Exit non-zero when leaks are found (1 = warnings, 2 = critical).
+        #[arg(long)]
+        exit_code: bool,
     },
     /// Find size outliers vs sibling directories (learned baselines).
     Anomalies {
@@ -56,6 +60,9 @@ enum Commands {
         /// Emit machine-readable JSON.
         #[arg(long)]
         json: bool,
+        /// Exit non-zero when outliers are found (1 = warnings, 2 = critical).
+        #[arg(long)]
+        exit_code: bool,
     },
     /// Reclaim regenerable caches. Dry-run unless --apply is passed.
     Reclaim {
@@ -68,6 +75,9 @@ enum Commands {
         /// Emit machine-readable JSON.
         #[arg(long)]
         json: bool,
+        /// Limit to targets whose name contains this text (repeatable).
+        #[arg(long, value_name = "NAME")]
+        only: Vec<String>,
     },
 }
 
@@ -115,6 +125,41 @@ fn palette() -> Palette {
 
 fn home() -> PathBuf {
     home_dir().unwrap_or_else(|| PathBuf::from("/"))
+}
+
+/// Map the highest finding severity to a process exit code: 2 critical,
+/// 1 warning, 0 otherwise (clean, or info-only).
+fn exit_code_for(max: Option<Severity>) -> ExitCode {
+    match max {
+        Some(Severity::Critical) => ExitCode::from(2),
+        Some(Severity::Warn) => ExitCode::from(1),
+        _ => ExitCode::SUCCESS,
+    }
+}
+
+/// Keep only reclaim targets whose name contains one of `patterns` (case-insensitive).
+fn filter_plan(plan: ReclaimPlan, patterns: &[String]) -> ReclaimPlan {
+    let lowered: Vec<String> = patterns.iter().map(|p| p.to_lowercase()).collect();
+    let matches = |name: &str| {
+        let name = name.to_lowercase();
+        lowered.iter().any(|p| name.contains(p.as_str()))
+    };
+    let auto_targets: Vec<_> = plan
+        .auto_targets
+        .into_iter()
+        .filter(|t| matches(&t.name))
+        .collect();
+    let manual_targets: Vec<_> = plan
+        .manual_targets
+        .into_iter()
+        .filter(|t| matches(&t.name))
+        .collect();
+    let auto_bytes = auto_targets.iter().map(|t| t.bytes).sum();
+    ReclaimPlan {
+        auto_targets,
+        manual_targets,
+        auto_bytes,
+    }
 }
 
 /// Run `work` on a worker thread while animating a live progress line on
@@ -168,7 +213,7 @@ where
     value
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<ExitCode> {
     match Cli::parse().command {
         Commands::Scan {
             path,
@@ -177,6 +222,7 @@ fn main() -> anyhow::Result<()> {
             tree,
             signatures,
             json,
+            exit_code,
         } => {
             let root = path.unwrap_or_else(home);
             let signatures = match signatures {
@@ -189,19 +235,36 @@ fn main() -> anyhow::Result<()> {
             let report = with_spinner("scanning", move || {
                 build_report(&root, top, include_tree, depth, &signatures)
             })?;
+            let code = if exit_code {
+                exit_code_for(report.findings.iter().map(|f| f.severity).max())
+            } else {
+                ExitCode::SUCCESS
+            };
             if json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
                 render_scan(&report);
             }
-            Ok(())
+            Ok(code)
         }
-        Commands::Anomalies { path, json } => run_anomalies(path, json),
-        Commands::Reclaim { apply, yes, json } => run_reclaim(apply, yes, json),
+        Commands::Anomalies {
+            path,
+            json,
+            exit_code,
+        } => run_anomalies(path, json, exit_code),
+        Commands::Reclaim {
+            apply,
+            yes,
+            json,
+            only,
+        } => {
+            run_reclaim(apply, yes, json, only)?;
+            Ok(ExitCode::SUCCESS)
+        }
     }
 }
 
-fn run_anomalies(path: Option<PathBuf>, json: bool) -> anyhow::Result<()> {
+fn run_anomalies(path: Option<PathBuf>, json: bool, exit_code: bool) -> anyhow::Result<ExitCode> {
     let anomalies = match path {
         Some(path) => with_spinner("analyzing", move || {
             let mut found = analyze_container("custom", &path, 100 * 1024 * 1024);
@@ -211,9 +274,15 @@ fn run_anomalies(path: Option<PathBuf>, json: bool) -> anyhow::Result<()> {
         None => with_spinner("analyzing zones", || detect_anomalies(&default_zones())),
     };
 
+    let code = if exit_code {
+        exit_code_for(anomalies.iter().map(|a| a.severity).max())
+    } else {
+        ExitCode::SUCCESS
+    };
+
     if json {
         println!("{}", serde_json::to_string_pretty(&anomalies)?);
-        return Ok(());
+        return Ok(code);
     }
 
     let Palette {
@@ -230,7 +299,7 @@ fn run_anomalies(path: Option<PathBuf>, json: bool) -> anyhow::Result<()> {
     );
     if anomalies.is_empty() {
         println!("  {dim}no outliers — every sibling looks normal{reset}");
-        return Ok(());
+        return Ok(code);
     }
     for anomaly in &anomalies {
         let (color, tag) = match anomaly.severity {
@@ -258,7 +327,7 @@ fn run_anomalies(path: Option<PathBuf>, json: bool) -> anyhow::Result<()> {
         }
         println!("      path: {}", anomaly.path.display());
     }
-    Ok(())
+    Ok(code)
 }
 
 fn render_scan(report: &ScanReport) {
@@ -275,6 +344,23 @@ fn render_scan(report: &ScanReport) {
     println!(
         "{bold}deepscan{reset} {dim}· scanning {}{reset}",
         report.root.display()
+    );
+
+    let critical = report
+        .findings
+        .iter()
+        .filter(|f| f.severity == Severity::Critical)
+        .count();
+    println!(
+        "{dim}summary:{reset} {bold}{}{reset} reclaimable · {} leak signature{}{}",
+        human(report.reclaimable_bytes),
+        report.findings.len(),
+        if report.findings.len() == 1 { "" } else { "s" },
+        if critical > 0 {
+            format!(" ({critical} critical)")
+        } else {
+            String::new()
+        }
     );
 
     if let Some(tree) = &report.tree {
@@ -373,8 +459,13 @@ fn print_tree(node: &TreeNode, indent: usize, threshold: u64) {
     }
 }
 
-fn run_reclaim(apply: bool, yes: bool, json: bool) -> anyhow::Result<()> {
+fn run_reclaim(apply: bool, yes: bool, json: bool, only: Vec<String>) -> anyhow::Result<()> {
     let plan = with_spinner("scanning reclaimable", build_reclaim_plan);
+    let plan = if only.is_empty() {
+        plan
+    } else {
+        filter_plan(plan, &only)
+    };
 
     if !apply {
         if json {

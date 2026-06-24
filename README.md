@@ -54,6 +54,15 @@ deepscan reclaim --apply      # free regenerable caches (asks first)
 Run `deepscan help <command>` (or `<command> --help`) for the full flag list.
 Every command supports `--json`.
 
+**Scripting:** `scan` and `anomalies` accept `--exit-code` (exit `1` on
+warnings, `2` on critical) so they gate CI. `reclaim --only <name>` (repeatable)
+limits cleanup to targets whose name matches.
+
+```sh
+deepscan scan --exit-code || echo "leaks found!"
+deepscan reclaim --only npm --only cargo --apply --yes
+```
+
 ## What it reports
 
 1. **Reclaimable buckets** — known caches (Xcode, npm/yarn/pnpm/cargo/go,
