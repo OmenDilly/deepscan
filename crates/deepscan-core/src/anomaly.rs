@@ -36,12 +36,36 @@ pub struct Zone {
 /// Zones where many same-class directories live — the places leaks hide.
 pub fn default_zones() -> Vec<Zone> {
     vec![
-        Zone { name: "Per-user temp", path: "$TMPDIR", min_flag_mb: 200 },
-        Zone { name: "Per-user temp caches", path: "/private/var/folders/*/*/C", min_flag_mb: 200 },
-        Zone { name: "User caches", path: "~/Library/Caches", min_flag_mb: 500 },
-        Zone { name: "App containers", path: "~/Library/Containers", min_flag_mb: 2000 },
-        Zone { name: "Application Support", path: "~/Library/Application Support", min_flag_mb: 1000 },
-        Zone { name: "Group containers", path: "~/Library/Group Containers", min_flag_mb: 500 },
+        Zone {
+            name: "Per-user temp",
+            path: "$TMPDIR",
+            min_flag_mb: 200,
+        },
+        Zone {
+            name: "Per-user temp caches",
+            path: "/private/var/folders/*/*/C",
+            min_flag_mb: 200,
+        },
+        Zone {
+            name: "User caches",
+            path: "~/Library/Caches",
+            min_flag_mb: 500,
+        },
+        Zone {
+            name: "App containers",
+            path: "~/Library/Containers",
+            min_flag_mb: 2000,
+        },
+        Zone {
+            name: "Application Support",
+            path: "~/Library/Application Support",
+            min_flag_mb: 1000,
+        },
+        Zone {
+            name: "Group containers",
+            path: "~/Library/Group Containers",
+            min_flag_mb: 500,
+        },
     ]
 }
 

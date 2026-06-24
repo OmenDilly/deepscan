@@ -1,5 +1,7 @@
 # deepscan
 
+[![CI](https://github.com/OmenDilly/deepscan/actions/workflows/ci.yml/badge.svg)](https://github.com/OmenDilly/deepscan/actions/workflows/ci.yml)
+
 Fast macOS disk forensics. A parallel size scanner with **broad coverage**
 (the reclaimable buckets every cleaner knows about) plus a **leak-signature
 engine** that catches the bloat nothing else does — like the `idleassetsd`

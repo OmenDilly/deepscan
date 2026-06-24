@@ -189,7 +189,10 @@ mod tests {
         assert!(!is_safe_to_delete(Path::new("/Users"), Some(&home)));
         assert!(!is_safe_to_delete(Path::new("/Users/tester"), Some(&home)));
         assert!(!is_safe_to_delete(Path::new("relative/path"), Some(&home)));
-        assert!(!is_safe_to_delete(Path::new("/Users/tester/../etc"), Some(&home)));
+        assert!(!is_safe_to_delete(
+            Path::new("/Users/tester/../etc"),
+            Some(&home)
+        ));
         assert!(is_safe_to_delete(
             Path::new("/Users/tester/Library/Caches"),
             Some(&home)

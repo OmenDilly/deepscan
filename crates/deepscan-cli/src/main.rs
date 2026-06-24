@@ -156,7 +156,10 @@ fn run_anomalies(path: Option<PathBuf>, json: bool) -> anyhow::Result<()> {
 }
 
 fn render_scan(report: &ScanReport) {
-    println!("{BOLD}deepscan{RESET} {DIM}· scanning {}{RESET}", report.root.display());
+    println!(
+        "{BOLD}deepscan{RESET} {DIM}· scanning {}{RESET}",
+        report.root.display()
+    );
 
     if !report.children.is_empty() {
         println!(
@@ -266,10 +269,18 @@ fn run_reclaim(apply: bool, yes: bool, json: bool) -> anyhow::Result<()> {
         println!("\n{BOLD}deepscan reclaim{RESET} {DIM}· applying{RESET}");
         for outcome in &result.deleted {
             if outcome.ok {
-                println!("  {GREEN}freed{RESET}  {:>11}  {}", human(outcome.bytes), outcome.name);
+                println!(
+                    "  {GREEN}freed{RESET}  {:>11}  {}",
+                    human(outcome.bytes),
+                    outcome.name
+                );
             } else {
                 let err = outcome.error.as_deref().unwrap_or("failed");
-                println!("  {RED}skip{RESET}   {:>11}  {} {DIM}({err}){RESET}", human(outcome.bytes), outcome.name);
+                println!(
+                    "  {RED}skip{RESET}   {:>11}  {} {DIM}({err}){RESET}",
+                    human(outcome.bytes),
+                    outcome.name
+                );
             }
         }
         println!("\n{BOLD}Reclaimed {}{RESET}", human(result.freed_bytes));
@@ -278,9 +289,7 @@ fn run_reclaim(apply: bool, yes: bool, json: bool) -> anyhow::Result<()> {
 }
 
 fn render_plan(plan: &ReclaimPlan, with_hint: bool) {
-    println!(
-        "{BOLD}deepscan reclaim{RESET} {DIM}· dry run (nothing deleted){RESET}"
-    );
+    println!("{BOLD}deepscan reclaim{RESET} {DIM}· dry run (nothing deleted){RESET}");
 
     if plan.auto_targets.is_empty() {
         println!("\n{DIM}Nothing safe to reclaim automatically.{RESET}");
