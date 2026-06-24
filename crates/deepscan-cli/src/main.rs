@@ -108,7 +108,7 @@ fn run_anomalies(path: Option<PathBuf>, json: bool) -> anyhow::Result<()> {
     let anomalies = match path {
         Some(path) => {
             let mut found = analyze_container("custom", &path, 100 * 1024 * 1024);
-            found.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+            found.sort_by_key(|anomaly| std::cmp::Reverse(anomaly.bytes));
             found
         }
         None => detect_anomalies(&default_zones()),

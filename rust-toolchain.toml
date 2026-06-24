@@ -1,0 +1,5 @@
+# Pin the toolchain so local builds and CI use the exact same rustc/clippy/
+# rustfmt — avoids "passes locally, fails in CI" lint drift.
+[toolchain]
+channel = "1.96.0"
+components = ["clippy", "rustfmt"]

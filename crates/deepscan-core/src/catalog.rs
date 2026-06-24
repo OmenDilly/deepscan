@@ -154,6 +154,6 @@ pub fn evaluate_catalog(entries: &[CatalogEntry]) -> Vec<Bucket> {
         })
         .collect();
 
-    buckets.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+    buckets.sort_by_key(|bucket| std::cmp::Reverse(bucket.bytes));
     buckets
 }

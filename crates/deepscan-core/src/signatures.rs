@@ -131,6 +131,6 @@ pub fn evaluate_signatures(signatures: &[Signature]) -> Vec<Finding> {
         }
     }
 
-    findings.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+    findings.sort_by_key(|finding| std::cmp::Reverse(finding.bytes));
     findings
 }

@@ -92,7 +92,7 @@ pub fn detect_anomalies(zones: &[Zone]) -> Vec<Anomaly> {
             anomalies.extend(analyze_container(zone.name, &container, floor));
         }
     }
-    anomalies.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+    anomalies.sort_by_key(|anomaly| std::cmp::Reverse(anomaly.bytes));
     anomalies
 }
 

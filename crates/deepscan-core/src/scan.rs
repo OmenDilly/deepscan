@@ -133,7 +133,7 @@ pub fn scan_children(root: &Path) -> io::Result<(u64, Vec<ChildSize>)> {
         })
         .collect();
 
-    children.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+    children.sort_by_key(|child| std::cmp::Reverse(child.bytes));
     let total = children.iter().map(|child| child.bytes).sum();
     Ok((total, children))
 }
