@@ -24,7 +24,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use glob::Pattern;
 use rayon::Scope;
 
-use crate::report::ChildSize;
+use crate::report::{ChildSize, TreeNode};
 
 /// A lightweight directory entry — just what the sizer needs.
 enum EntryKind {
@@ -116,6 +116,67 @@ fn count_dir<'scope>(
     }
 }
 
+/// Build a size tree rooted at `path`, recording children down to `depth`
+/// levels. Directories at the frontier (`depth == 0`) get their full recursive
+/// size via [`measure_path`] but no recorded children, so every file is still
+/// visited exactly once.
+pub fn build_tree(path: &Path, depth: usize) -> TreeNode {
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string_lossy().into_owned());
+
+    let meta = fs::symlink_metadata(path);
+    let file_type = meta.as_ref().map(|m| m.file_type());
+
+    let is_symlink = file_type.map(|ft| ft.is_symlink()).unwrap_or(false);
+    let is_dir = file_type.map(|ft| ft.is_dir()).unwrap_or(false);
+
+    if is_symlink || !is_dir {
+        let bytes = if is_symlink {
+            0
+        } else {
+            meta.map(|m| m.len()).unwrap_or(0)
+        };
+        return TreeNode {
+            name,
+            path: path.to_path_buf(),
+            bytes,
+            is_dir: false,
+            children: Vec::new(),
+        };
+    }
+
+    if depth == 0 {
+        return TreeNode {
+            name,
+            path: path.to_path_buf(),
+            bytes: measure_path(path),
+            is_dir: true,
+            children: Vec::new(),
+        };
+    }
+
+    let entries: Vec<_> = match fs::read_dir(path) {
+        Ok(read_dir) => read_dir.filter_map(Result::ok).collect(),
+        Err(_) => Vec::new(),
+    };
+    let mut children: Vec<TreeNode> = entries
+        .iter()
+        .map(|entry| build_tree(&entry.path(), depth - 1))
+        .collect();
+    children.sort_by_key(|child| std::cmp::Reverse(child.bytes));
+    let bytes = children.iter().map(|child| child.bytes).sum();
+
+    TreeNode {
+        name,
+        path: path.to_path_buf(),
+        bytes,
+        is_dir: true,
+        children,
+    }
+}
+
 /// Size every immediate child of `root`, returning `(total, children desc)`.
 pub fn scan_children(root: &Path) -> io::Result<(u64, Vec<ChildSize>)> {
     let entries: Vec<_> = fs::read_dir(root)?.filter_map(Result::ok).collect();
@@ -136,6 +197,36 @@ pub fn scan_children(root: &Path) -> io::Result<(u64, Vec<ChildSize>)> {
     children.sort_by_key(|child| std::cmp::Reverse(child.bytes));
     let total = children.iter().map(|child| child.bytes).sum();
     Ok((total, children))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_tree_respects_depth() {
+        let base = std::env::temp_dir().join(format!("deepscan-tree-{}", std::process::id()));
+        std::fs::create_dir_all(base.join("a").join("b")).unwrap();
+        std::fs::write(base.join("a").join("b").join("file"), vec![0u8; 1024]).unwrap();
+        std::fs::write(base.join("top"), vec![0u8; 512]).unwrap();
+
+        // depth 1: full size is correct, but grandchildren are not recorded.
+        let t1 = build_tree(&base, 1);
+        assert_eq!(t1.bytes, 1024 + 512);
+        let a1 = t1.children.iter().find(|c| c.name == "a").unwrap();
+        assert_eq!(a1.bytes, 1024);
+        assert!(
+            a1.children.is_empty(),
+            "depth 1 must not record grandchildren"
+        );
+
+        // depth 2: directory "a" now records its child "b".
+        let t2 = build_tree(&base, 2);
+        let a2 = t2.children.iter().find(|c| c.name == "a").unwrap();
+        assert!(a2.children.iter().any(|c| c.name == "b" && c.bytes == 1024));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }
 
 // ---------------------------------------------------------------------------

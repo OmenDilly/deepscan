@@ -10,7 +10,7 @@ use clap::{Parser, Subcommand};
 use deepscan_core::{
     analyze_container, build_reclaim_plan, build_report, default_signatures, default_zones,
     detect_anomalies, execute_reclaim, home_dir, human, load_signatures, ReclaimPlan, ScanReport,
-    Severity,
+    Severity, TreeNode,
 };
 
 #[derive(Parser)]
@@ -33,6 +33,9 @@ enum Commands {
         /// Show the top N largest children.
         #[arg(long, default_value_t = 12)]
         top: usize,
+        /// Nesting depth of the size tree (1 = flat top level).
+        #[arg(long, default_value_t = 1)]
+        depth: usize,
         /// Use a custom signatures file instead of the built-in set.
         #[arg(long)]
         signatures: Option<PathBuf>,
@@ -72,6 +75,7 @@ const GREEN: &str = "\x1b[32m";
 const YELLOW: &str = "\x1b[33m";
 const CYAN: &str = "\x1b[36m";
 const RESET: &str = "\x1b[0m";
+const TOP_PER_LEVEL: usize = 12;
 
 fn home() -> PathBuf {
     home_dir().unwrap_or_else(|| PathBuf::from("/"))
@@ -82,6 +86,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Scan {
             path,
             top,
+            depth,
             signatures,
             no_tree,
             json,
@@ -91,7 +96,8 @@ fn main() -> anyhow::Result<()> {
                 Some(path) => load_signatures(&path)?,
                 None => default_signatures(),
             };
-            let report = build_report(&root, top, !no_tree, &signatures)?;
+            let depth = depth.clamp(1, 6);
+            let report = build_report(&root, top, !no_tree, depth, &signatures)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
@@ -161,7 +167,18 @@ fn render_scan(report: &ScanReport) {
         report.root.display()
     );
 
-    if !report.children.is_empty() {
+    if let Some(tree) = &report.tree {
+        println!(
+            "\n{BOLD}Where the space is{RESET} {DIM}(total {}){RESET}",
+            human(report.total_bytes)
+        );
+        // Prune small entries so a deep tree stays readable.
+        let threshold = (report.total_bytes / 100).max(50 * 1024 * 1024);
+        let shown = tree.children.iter().filter(|c| c.bytes >= threshold);
+        for child in shown.take(TOP_PER_LEVEL) {
+            print_tree(child, 1, threshold);
+        }
+    } else if !report.children.is_empty() {
         println!(
             "\n{BOLD}Where the space is{RESET} {DIM}(total {}){RESET}",
             human(report.total_bytes)
@@ -218,6 +235,25 @@ fn render_scan(report: &ScanReport) {
             }
             println!("      reclaim:  {}", finding.safe_delete);
         }
+    }
+}
+
+fn print_tree(node: &TreeNode, indent: usize, threshold: u64) {
+    let pad = "  ".repeat(indent);
+    println!("  {:>11}  {pad}{}", human(node.bytes), node.name);
+
+    let shown: Vec<&TreeNode> = node
+        .children
+        .iter()
+        .filter(|child| child.bytes >= threshold)
+        .collect();
+    for child in shown.iter().take(TOP_PER_LEVEL) {
+        print_tree(child, indent + 1, threshold);
+    }
+    let hidden = shown.len().saturating_sub(TOP_PER_LEVEL);
+    if hidden > 0 {
+        let pad = "  ".repeat(indent + 1);
+        println!("  {:>11}  {pad}{DIM}… {hidden} more{RESET}", "");
     }
 }
 

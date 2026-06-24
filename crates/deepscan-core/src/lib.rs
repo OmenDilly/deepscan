@@ -18,8 +18,8 @@ pub use engine::{
     build_reclaim_plan, build_report, execute_reclaim, home_dir, is_safe_to_delete, ReclaimOutcome,
     ReclaimPlan, ReclaimResult, ReclaimTarget,
 };
-pub use report::{human, Bucket, ChildSize, Finding, ScanReport, Severity};
-pub use scan::{count_matching_files, measure_path, scan_children};
+pub use report::{human, Bucket, ChildSize, Finding, ScanReport, Severity, TreeNode};
+pub use scan::{build_tree, count_matching_files, measure_path, scan_children};
 pub use signatures::{
     default_signatures, evaluate_signatures, load_signatures, parse_signatures, Signature,
 };

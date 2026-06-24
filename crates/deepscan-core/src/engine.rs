@@ -7,23 +7,38 @@ use std::path::{Component, Path, PathBuf};
 use serde::Serialize;
 
 use crate::catalog::{default_catalog, evaluate_catalog};
-use crate::report::ScanReport;
-use crate::scan::scan_children;
+use crate::report::{ChildSize, ScanReport};
+use crate::scan::{build_tree, scan_children};
 use crate::signatures::{evaluate_signatures, Signature};
 
 /// Build the full scan report: tree breakdown, reclaimable buckets, and fired
 /// leak signatures. `top` truncates the child list; `include_tree` skips the
-/// (independent) child breakdown when false.
+/// (independent) child breakdown when false; `depth >= 2` adds a nested tree.
 pub fn build_report(
     root: &Path,
     top: usize,
     include_tree: bool,
+    depth: usize,
     signatures: &[Signature],
 ) -> io::Result<ScanReport> {
-    let (total_bytes, mut children) = if include_tree {
-        scan_children(root)?
+    let (total_bytes, mut children, tree) = if !include_tree {
+        (0, Vec::new(), None)
+    } else if depth >= 2 {
+        let tree = build_tree(root, depth);
+        let total = tree.bytes;
+        let flat = tree
+            .children
+            .iter()
+            .map(|node| ChildSize {
+                name: node.name.clone(),
+                path: node.path.clone(),
+                bytes: node.bytes,
+            })
+            .collect();
+        (total, flat, Some(tree))
     } else {
-        (0, Vec::new())
+        let (total, children) = scan_children(root)?;
+        (total, children, None)
     };
     children.retain(|child| child.bytes > 0);
     children.truncate(top);
@@ -36,6 +51,7 @@ pub fn build_report(
         root: root.to_path_buf(),
         total_bytes,
         children,
+        tree,
         reclaimable_bytes,
         buckets,
         findings,

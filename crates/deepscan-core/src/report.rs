@@ -13,6 +13,17 @@ pub struct ChildSize {
     pub bytes: u64,
 }
 
+/// A node in a depth-bounded size tree (the `--depth` view). Leaf directories
+/// at the depth frontier carry their full recursive size with no children.
+#[derive(Debug, Clone, Serialize)]
+pub struct TreeNode {
+    pub name: String,
+    pub path: PathBuf,
+    pub bytes: u64,
+    pub is_dir: bool,
+    pub children: Vec<TreeNode>,
+}
+
 /// A known reclaimable location (the broad, every-Mac coverage).
 #[derive(Debug, Clone, Serialize)]
 pub struct Bucket {
@@ -58,6 +69,9 @@ pub struct ScanReport {
     pub root: PathBuf,
     pub total_bytes: u64,
     pub children: Vec<ChildSize>,
+    /// Present only when `--depth >= 2`; the nested size tree.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tree: Option<TreeNode>,
     pub reclaimable_bytes: u64,
     pub buckets: Vec<Bucket>,
     pub findings: Vec<Finding>,

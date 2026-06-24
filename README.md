@@ -29,6 +29,7 @@ as shown below.
 cargo run --release -- scan          # scan your home directory
 cargo run --release -- scan /        # scan from the volume root (run with sudo for shadow zones)
 cargo run --release -- scan ~/Library/Developer --top 20
+cargo run --release -- scan ~/Library/Developer --depth 3   # nested size tree
 cargo run --release -- scan --json | jq .   # machine-readable, for scripts/CI
 
 cargo run --release -- anomalies     # find UNKNOWN leaks: outliers vs sibling median

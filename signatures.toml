@@ -108,6 +108,26 @@ root_cause = "sleepimage equals installed RAM; swapfiles grow under memory press
 prevention = "Frees on reboot; on a desktop that never hibernates, sudo pmset hibernatemode 0 stops the sleepimage"
 
 [[signature]]
+name = "Simulator dyld caches"
+description = "Per-runtime dyld shared caches for the iOS/watchOS/tvOS simulators"
+path = "~/Library/Developer/CoreSimulator/Caches/dyld"
+owner = "com.apple.CoreSimulator"
+baseline_mb = 3000
+severity = "info"
+root_cause = "Each installed simulator runtime caches a multi-GB dyld shared cache"
+prevention = "Safe to remove; regenerates when a simulator boots"
+
+[[signature]]
+name = "Downloaded simulator runtimes"
+description = "Installed simulator runtime images (needs sudo to read)"
+path = "/Library/Developer/CoreSimulator/Images"
+owner = "com.apple.CoreSimulator"
+baseline_mb = 8000
+severity = "info"
+root_cause = "Old simulator runtime images accumulate across Xcode versions"
+prevention = "xcrun simctl runtime list; xcrun simctl runtime delete <id> for unused ones"
+
+[[signature]]
 name = "Homebrew download cache"
 description = "Downloaded bottles and source tarballs"
 path = "~/Library/Caches/Homebrew"
