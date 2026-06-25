@@ -27,15 +27,15 @@ use rayon::Scope;
 use crate::report::{ChildSize, TreeNode};
 
 /// A lightweight directory entry — just what the sizer needs.
-enum EntryKind {
+pub(crate) enum EntryKind {
     File(u64),
     Dir,
     Skip,
 }
 
-struct LiteEntry {
-    name: OsString,
-    kind: EntryKind,
+pub(crate) struct LiteEntry {
+    pub(crate) name: OsString,
+    pub(crate) kind: EntryKind,
 }
 
 /// Live progress counters, read by the CLI spinner. Reset before each scan.
@@ -308,12 +308,12 @@ fn read_dir_lite_std(dir: &Path) -> Vec<LiteEntry> {
 
 #[cfg(not(target_os = "macos"))]
 #[inline]
-fn read_dir_lite(dir: &Path) -> Vec<LiteEntry> {
+pub(crate) fn read_dir_lite(dir: &Path) -> Vec<LiteEntry> {
     read_dir_lite_std(dir)
 }
 
 #[cfg(target_os = "macos")]
-fn read_dir_lite(dir: &Path) -> Vec<LiteEntry> {
+pub(crate) fn read_dir_lite(dir: &Path) -> Vec<LiteEntry> {
     use std::sync::OnceLock;
     static USE_BULK: OnceLock<bool> = OnceLock::new();
     let use_bulk = *USE_BULK.get_or_init(|| std::env::var_os("DEEPSCAN_NO_BULK").is_none());

@@ -8,6 +8,7 @@
 pub mod anomaly;
 pub mod catalog;
 pub mod engine;
+pub mod files;
 pub mod report;
 pub mod scan;
 pub mod signatures;
@@ -19,8 +20,10 @@ pub use engine::{
     build_reclaim_plan, build_report, execute_reclaim, home_dir, is_safe_to_delete, ReclaimOutcome,
     ReclaimPlan, ReclaimResult, ReclaimTarget,
 };
+pub use files::{find_duplicates, find_large_files};
 pub use report::{
-    human, Bucket, ChildSize, DiskSpace, Finding, ScanReport, Severity, SpaceReport, TreeNode,
+    human, Bucket, ChildSize, DiskSpace, DuplicateGroup, Finding, LargeFile, ScanReport, Severity,
+    SpaceReport, TreeNode,
 };
 pub use scan::{
     build_tree, count_matching_files, measure_path, progress, reset_progress, scan_children,

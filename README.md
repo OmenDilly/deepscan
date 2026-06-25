@@ -35,6 +35,8 @@ deepscan scan ~/Library/Developer --depth 3   # nested size tree of a directory
 deepscan scan --json | jq .   # machine-readable, for scripts/CI
 
 deepscan space                # honest disk accounting: capacity + the "System Data" gap
+deepscan large --older 90     # biggest files you haven't modified in 90+ days
+deepscan dupes                # exact duplicate files (zero false positives)
 
 deepscan anomalies            # find UNKNOWN leaks: outliers vs sibling median
 deepscan anomalies "$TMPDIR"  # analyze any one directory's children
@@ -56,6 +58,8 @@ deepscan reclaim --apply      # free regenerable caches (asks first)
 | `deepscan anomalies [PATH]` | Unknown-leak detection — directories that are size outliers vs their siblings' learned median. |
 | `deepscan reclaim` | Guarded cleanup of regenerable caches. Dry-run by default; `--apply` (with `--yes`) to delete. |
 | `deepscan space [PATH]` | Honest disk accounting — true capacity/used/free + the local APFS snapshots behind "System Data" (with the reclaim command). |
+| `deepscan large [PATH]` | Largest files, optionally only old ones (`--older N`, `--min-mb`). |
+| `deepscan dupes [PATH]` | Exact duplicate files (size-bucket + BLAKE3; zero false positives). |
 
 Run `deepscan help <command>` (or `<command> --help`) for the full flag list.
 Every command supports `--json`.

@@ -84,6 +84,24 @@ pub struct SpaceReport {
     pub reclaim_snapshots: Option<String>,
 }
 
+/// A large file (the `large` command); `*_days` is age since now.
+#[derive(Debug, Clone, Serialize)]
+pub struct LargeFile {
+    pub path: PathBuf,
+    pub bytes: u64,
+    pub modified_days: Option<u64>,
+    pub accessed_days: Option<u64>,
+}
+
+/// A set of byte-for-byte identical files (the `dupes` command). `wasted` =
+/// `bytes * (count - 1)` — what you'd reclaim keeping one copy.
+#[derive(Debug, Clone, Serialize)]
+pub struct DuplicateGroup {
+    pub bytes: u64,
+    pub wasted: u64,
+    pub paths: Vec<PathBuf>,
+}
+
 /// The full result of a `scan` — the JSON payload, and the source the human
 /// renderer reads from.
 #[derive(Debug, Clone, Serialize)]

@@ -11,8 +11,9 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use deepscan_core::{
     analyze_container, build_reclaim_plan, build_report, default_signatures, default_zones,
-    detect_anomalies, execute_reclaim, home_dir, human, load_signatures, progress, reset_progress,
-    space_report, ReclaimPlan, ScanReport, Severity, SpaceReport, TreeNode,
+    detect_anomalies, execute_reclaim, find_duplicates, find_large_files, home_dir, human,
+    load_signatures, progress, reset_progress, space_report, DuplicateGroup, ReclaimPlan,
+    ScanReport, Severity, SpaceReport, TreeNode,
 };
 
 #[derive(Parser)]
@@ -83,6 +84,37 @@ enum Commands {
     Space {
         /// Volume or path to report on (default: your home directory).
         path: Option<PathBuf>,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// List the largest files, optionally only old ones.
+    Large {
+        /// Root to search (default: your home directory).
+        path: Option<PathBuf>,
+        /// Show the top N files.
+        #[arg(long, default_value_t = 12)]
+        top: usize,
+        /// Minimum file size to consider, in MB.
+        #[arg(long, default_value_t = 100)]
+        min_mb: u64,
+        /// Only files not modified in at least N days.
+        #[arg(long)]
+        older: Option<u64>,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Find exact duplicate files (size-bucket + BLAKE3, zero false positives).
+    Dupes {
+        /// Root to search (default: your home directory).
+        path: Option<PathBuf>,
+        /// Show the top N duplicate sets.
+        #[arg(long, default_value_t = 12)]
+        top: usize,
+        /// Minimum file size to consider, in MB.
+        #[arg(long, default_value_t = 1)]
+        min_mb: u64,
         /// Emit machine-readable JSON.
         #[arg(long)]
         json: bool,
@@ -279,7 +311,123 @@ fn main() -> anyhow::Result<ExitCode> {
             }
             Ok(ExitCode::SUCCESS)
         }
+        Commands::Large {
+            path,
+            top,
+            min_mb,
+            older,
+            json,
+        } => run_large(path, top, min_mb, older, json),
+        Commands::Dupes {
+            path,
+            top,
+            min_mb,
+            json,
+        } => run_dupes(path, top, min_mb, json),
     }
+}
+
+fn run_large(
+    path: Option<PathBuf>,
+    top: usize,
+    min_mb: u64,
+    older: Option<u64>,
+    json: bool,
+) -> anyhow::Result<ExitCode> {
+    let root = path.unwrap_or_else(home);
+    let min = min_mb.saturating_mul(1024 * 1024);
+    let mut files = with_spinner("finding large files", move || find_large_files(&root, min));
+    if let Some(days) = older {
+        files.retain(|f| f.modified_days.map(|d| d >= days).unwrap_or(false));
+    }
+    files.truncate(top);
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&files)?);
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    let Palette {
+        bold,
+        dim,
+        cyan,
+        reset,
+        ..
+    } = palette();
+    let label = match older {
+        Some(days) => format!("largest files not modified in {days}+ days"),
+        None => "largest files".to_string(),
+    };
+    println!("{bold}deepscan large{reset} {dim}· {label}{reset}");
+    if files.is_empty() {
+        println!("  {dim}nothing above the size threshold{reset}");
+        return Ok(ExitCode::SUCCESS);
+    }
+    for file in &files {
+        let age = file
+            .modified_days
+            .map(|d| format!("{d}d"))
+            .unwrap_or_else(|| "?".to_string());
+        println!(
+            "  {cyan}{:>11}{reset}  {dim}{:>5} old{reset}  {}",
+            human(file.bytes),
+            age,
+            file.path.display()
+        );
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn run_dupes(
+    path: Option<PathBuf>,
+    top: usize,
+    min_mb: u64,
+    json: bool,
+) -> anyhow::Result<ExitCode> {
+    let root = path.unwrap_or_else(home);
+    let min = min_mb.saturating_mul(1024 * 1024);
+    let groups = with_spinner("finding duplicates", move || find_duplicates(&root, min));
+
+    if json {
+        let shown: Vec<&DuplicateGroup> = groups.iter().take(top).collect();
+        println!("{}", serde_json::to_string_pretty(&shown)?);
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    let Palette {
+        bold,
+        dim,
+        green,
+        reset,
+        ..
+    } = palette();
+    let wasted: u64 = groups.iter().map(|g| g.wasted).sum();
+    println!(
+        "{bold}deepscan dupes{reset} {dim}· {} reclaimable across {} duplicate set{}{reset}",
+        human(wasted),
+        groups.len(),
+        if groups.len() == 1 { "" } else { "s" }
+    );
+    if groups.is_empty() {
+        println!("  {dim}no exact duplicates found{reset}");
+        return Ok(ExitCode::SUCCESS);
+    }
+    for group in groups.iter().take(top) {
+        println!(
+            "  {green}{:>11}{reset} wasted  {dim}({} copies × {}){reset}",
+            human(group.wasted),
+            group.paths.len(),
+            human(group.bytes)
+        );
+        for path in &group.paths {
+            println!("      {dim}{}{reset}", path.display());
+        }
+    }
+    let hidden = groups.len().saturating_sub(top);
+    if hidden > 0 {
+        println!("  {dim}… {hidden} more set(s){reset}");
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 fn render_space(root: &Path, report: &SpaceReport) {
