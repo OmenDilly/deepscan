@@ -62,11 +62,36 @@ pub struct Finding {
     pub file_matches: Option<u64>,
 }
 
+/// True volume capacity from `statfs` — the disk-level frame every serious tool
+/// grounds its numbers in.
+#[derive(Debug, Clone, Serialize)]
+pub struct DiskSpace {
+    pub path: PathBuf,
+    pub total: u64,
+    pub used: u64,
+    pub free: u64,
+}
+
+/// Honest "where did the hidden space go" accounting. macOS does NOT expose
+/// per-snapshot sizes (verified: `tmutil`/`diskutil` give names, not sizes), so
+/// this reports what *is* knowable rather than inventing a number.
+#[derive(Debug, Clone, Serialize)]
+pub struct SpaceReport {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disk: Option<DiskSpace>,
+    pub snapshots: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reclaim_snapshots: Option<String>,
+}
+
 /// The full result of a `scan` — the JSON payload, and the source the human
 /// renderer reads from.
 #[derive(Debug, Clone, Serialize)]
 pub struct ScanReport {
     pub root: PathBuf,
+    /// Volume capacity for the scanned root's filesystem (the disk-level frame).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disk: Option<DiskSpace>,
     pub total_bytes: u64,
     pub children: Vec<ChildSize>,
     /// Present only when `--depth >= 2`; the nested size tree.

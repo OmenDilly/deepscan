@@ -11,6 +11,7 @@ pub mod engine;
 pub mod report;
 pub mod scan;
 pub mod signatures;
+pub mod space;
 
 pub use anomaly::{analyze_container, default_zones, detect_anomalies, Anomaly, Zone};
 pub use catalog::{default_catalog, evaluate_catalog, CatalogEntry};
@@ -18,10 +19,13 @@ pub use engine::{
     build_reclaim_plan, build_report, execute_reclaim, home_dir, is_safe_to_delete, ReclaimOutcome,
     ReclaimPlan, ReclaimResult, ReclaimTarget,
 };
-pub use report::{human, Bucket, ChildSize, Finding, ScanReport, Severity, TreeNode};
+pub use report::{
+    human, Bucket, ChildSize, DiskSpace, Finding, ScanReport, Severity, SpaceReport, TreeNode,
+};
 pub use scan::{
     build_tree, count_matching_files, measure_path, progress, reset_progress, scan_children,
 };
 pub use signatures::{
     default_signatures, evaluate_signatures, load_signatures, parse_signatures, Signature,
 };
+pub use space::{disk_space, local_snapshots, space_report};

@@ -5,14 +5,14 @@
 //!   deepscan reclaim [--apply] guarded cleanup of regenerable caches
 
 use std::io::{IsTerminal, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use deepscan_core::{
     analyze_container, build_reclaim_plan, build_report, default_signatures, default_zones,
     detect_anomalies, execute_reclaim, home_dir, human, load_signatures, progress, reset_progress,
-    ReclaimPlan, ScanReport, Severity, TreeNode,
+    space_report, ReclaimPlan, ScanReport, Severity, SpaceReport, TreeNode,
 };
 
 #[derive(Parser)]
@@ -78,6 +78,14 @@ enum Commands {
         /// Limit to targets whose name contains this text (repeatable).
         #[arg(long, value_name = "NAME")]
         only: Vec<String>,
+    },
+    /// Honest disk accounting: true capacity + local snapshots (the "System Data" gap).
+    Space {
+        /// Volume or path to report on (default: your home directory).
+        path: Option<PathBuf>,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -261,7 +269,64 @@ fn main() -> anyhow::Result<ExitCode> {
             run_reclaim(apply, yes, json, only)?;
             Ok(ExitCode::SUCCESS)
         }
+        Commands::Space { path, json } => {
+            let root = path.unwrap_or_else(home);
+            let report = space_report(&root);
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                render_space(&root, &report);
+            }
+            Ok(ExitCode::SUCCESS)
+        }
     }
+}
+
+fn render_space(root: &Path, report: &SpaceReport) {
+    let Palette {
+        bold,
+        dim,
+        cyan,
+        reset,
+        ..
+    } = palette();
+
+    println!(
+        "{bold}deepscan space{reset} {dim}· {}{reset}",
+        root.display()
+    );
+
+    if let Some(disk) = &report.disk {
+        let pct = (disk.used * 100).checked_div(disk.total).unwrap_or(0);
+        println!("  {:>11}  capacity", human(disk.total));
+        println!("  {:>11}  used  {dim}({pct}%){reset}", human(disk.used));
+        println!("  {cyan}{:>11}{reset}  free", human(disk.free));
+    } else {
+        println!("  {dim}(disk capacity unavailable on this platform){reset}");
+    }
+
+    println!();
+    if report.snapshots.is_empty() {
+        println!("  {dim}no local APFS snapshots{reset}");
+    } else {
+        println!(
+            "  {bold}Local snapshots: {}{reset} {dim}(macOS does not expose per-snapshot sizes){reset}",
+            report.snapshots.len()
+        );
+        for snapshot in &report.snapshots {
+            println!("    {dim}{snapshot}{reset}");
+        }
+        if let Some(cmd) = &report.reclaim_snapshots {
+            println!("  reclaim:  {cmd}");
+        }
+    }
+
+    println!();
+    println!(
+        "  {dim}The \"System Data\" gap = these snapshots + purgeable caches macOS reclaims{reset}"
+    );
+    println!("  {dim}on demand. Their exact sizes are not exposed by tmutil/diskutil — that's the{reset}");
+    println!("  {dim}honest limit. Run `deepscan scan --tree` to see the files you CAN account for.{reset}");
 }
 
 fn run_anomalies(path: Option<PathBuf>, json: bool, exit_code: bool) -> anyhow::Result<ExitCode> {
@@ -362,6 +427,15 @@ fn render_scan(report: &ScanReport) {
             String::new()
         }
     );
+    if let Some(disk) = &report.disk {
+        let pct = (disk.used * 100).checked_div(disk.total).unwrap_or(0);
+        println!(
+            "{dim}disk:{reset} {} used of {} {dim}· {} free ({pct}%){reset}",
+            human(disk.used),
+            human(disk.total),
+            human(disk.free)
+        );
+    }
 
     if let Some(tree) = &report.tree {
         println!(

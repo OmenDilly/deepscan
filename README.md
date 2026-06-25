@@ -34,6 +34,8 @@ deepscan scan --tree          # also walk the whole tree — where did the space
 deepscan scan ~/Library/Developer --depth 3   # nested size tree of a directory
 deepscan scan --json | jq .   # machine-readable, for scripts/CI
 
+deepscan space                # honest disk accounting: capacity + the "System Data" gap
+
 deepscan anomalies            # find UNKNOWN leaks: outliers vs sibling median
 deepscan anomalies "$TMPDIR"  # analyze any one directory's children
 
@@ -53,6 +55,7 @@ deepscan reclaim --apply      # free regenerable caches (asks first)
 | `deepscan scan [PATH]` | Reclaimable caches + leak signatures (fast). `--tree` / `--depth N` adds the full size tree; `--json` for machine output. |
 | `deepscan anomalies [PATH]` | Unknown-leak detection — directories that are size outliers vs their siblings' learned median. |
 | `deepscan reclaim` | Guarded cleanup of regenerable caches. Dry-run by default; `--apply` (with `--yes`) to delete. |
+| `deepscan space [PATH]` | Honest disk accounting — true capacity/used/free + the local APFS snapshots behind "System Data" (with the reclaim command). |
 
 Run `deepscan help <command>` (or `<command> --help`) for the full flag list.
 Every command supports `--json`.
@@ -77,6 +80,10 @@ deepscan reclaim --only npm --only cargo --apply --yes
 4. **Anomalies** (`deepscan anomalies`) — *unknown* leaks: directories that are
    size outliers vs their siblings' learned median. Catches the next
    idleassetsd-style leak with no signature written for it.
+5. **Honest disk accounting** (`deepscan space`) — true capacity/used/free plus
+   the local APFS snapshots behind the dreaded "System Data" figure (with the
+   reclaim command). macOS doesn't expose per-snapshot sizes, so deepscan says
+   so plainly instead of faking a number — the honest answer no other tool gives.
 
 ## Signatures are data, not code
 

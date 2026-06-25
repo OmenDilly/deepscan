@@ -49,6 +49,7 @@ pub fn build_report(
 
     Ok(ScanReport {
         root: root.to_path_buf(),
+        disk: crate::space::disk_space(root),
         total_bytes,
         children,
         tree,
