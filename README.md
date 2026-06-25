@@ -37,6 +37,7 @@ deepscan scan --json | jq .   # machine-readable, for scripts/CI
 deepscan space                # honest disk accounting: capacity + the "System Data" gap
 deepscan large --older 90     # biggest files you haven't modified in 90+ days
 deepscan dupes                # exact duplicate files (zero false positives)
+deepscan uninstall Docker     # an app + its leftover files (dry-run; --apply trashes)
 
 deepscan anomalies            # find UNKNOWN leaks: outliers vs sibling median
 deepscan anomalies "$TMPDIR"  # analyze any one directory's children
@@ -60,6 +61,7 @@ deepscan reclaim --apply      # free regenerable caches (asks first)
 | `deepscan space [PATH]` | Honest disk accounting — true capacity/used/free + the local APFS snapshots behind "System Data" (with the reclaim command). |
 | `deepscan large [PATH]` | Largest files, optionally only old ones (`--older N`, `--min-mb`). |
 | `deepscan dupes [PATH]` | Exact duplicate files (size-bucket + BLAKE3; zero false positives). |
+| `deepscan uninstall <APP>` | An app + its leftover support files (confidence-tiered). Dry-run; `--apply` moves them to the Trash (recoverable). |
 
 Run `deepscan help <command>` (or `<command> --help`) for the full flag list.
 Every command supports `--json`.

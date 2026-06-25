@@ -11,9 +11,10 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use deepscan_core::{
     analyze_container, build_reclaim_plan, build_report, default_signatures, default_zones,
-    detect_anomalies, execute_reclaim, find_duplicates, find_large_files, home_dir, human,
-    load_signatures, progress, reset_progress, space_report, DuplicateGroup, ReclaimPlan,
-    ScanReport, Severity, SpaceReport, TreeNode,
+    detect_anomalies, execute_reclaim, execute_uninstall, find_duplicates, find_large_files,
+    home_dir, human, load_signatures, plan_uninstall, progress, reset_progress, space_report,
+    Confidence, DuplicateGroup, ReclaimPlan, ScanReport, Severity, SpaceReport, TreeNode,
+    UninstallPlan,
 };
 
 #[derive(Parser)]
@@ -115,6 +116,20 @@ enum Commands {
         /// Minimum file size to consider, in MB.
         #[arg(long, default_value_t = 1)]
         min_mb: u64,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Find an app + its leftover files; dry-run, or --apply to Trash them.
+    Uninstall {
+        /// App name (e.g. "Docker") or a path to a .app bundle.
+        app: String,
+        /// Move the app + leftovers to the Trash (recoverable). Default: dry-run.
+        #[arg(long)]
+        apply: bool,
+        /// Skip the confirmation prompt (required with --apply when piped).
+        #[arg(long)]
+        yes: bool,
         /// Emit machine-readable JSON.
         #[arg(long)]
         json: bool,
@@ -324,6 +339,12 @@ fn main() -> anyhow::Result<ExitCode> {
             min_mb,
             json,
         } => run_dupes(path, top, min_mb, json),
+        Commands::Uninstall {
+            app,
+            apply,
+            yes,
+            json,
+        } => run_uninstall(app, apply, yes, json),
     }
 }
 
@@ -428,6 +449,131 @@ fn run_dupes(
         println!("  {dim}… {hidden} more set(s){reset}");
     }
     Ok(ExitCode::SUCCESS)
+}
+
+fn run_uninstall(app: String, apply: bool, yes: bool, json: bool) -> anyhow::Result<ExitCode> {
+    let plan = with_spinner("finding app + leftovers", move || plan_uninstall(&app));
+    let plan = match plan {
+        Some(plan) => plan,
+        None => anyhow::bail!("app not found — pass the exact name or a path to the .app bundle"),
+    };
+
+    if !apply {
+        if json {
+            println!("{}", serde_json::to_string_pretty(&plan)?);
+        } else {
+            render_uninstall(&plan);
+            let Palette { dim, reset, .. } = palette();
+            println!("\n  {dim}--apply moves all of the above to the Trash (recoverable).{reset}");
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    // --apply: show what will move, then confirm.
+    if !json {
+        render_uninstall(&plan);
+    }
+    if plan.app_path.is_none() && plan.leftovers.is_empty() {
+        return Ok(ExitCode::SUCCESS);
+    }
+    if !yes {
+        if !std::io::stdin().is_terminal() {
+            anyhow::bail!("refusing to uninstall without confirmation — re-run with --apply --yes");
+        }
+        print!(
+            "\nMove {} ({}) to the Trash? [y/N] ",
+            plan.app_name,
+            human(plan.total_bytes)
+        );
+        std::io::stdout().flush().ok();
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer)?;
+        if !matches!(answer.trim(), "y" | "Y" | "yes") {
+            println!("Aborted. Nothing moved.");
+            return Ok(ExitCode::SUCCESS);
+        }
+    }
+
+    let outcomes = execute_uninstall(&plan);
+    if json {
+        println!("{}", serde_json::to_string_pretty(&outcomes)?);
+    } else {
+        let Palette {
+            bold,
+            dim,
+            red,
+            green,
+            reset,
+            ..
+        } = palette();
+        let freed: u64 = outcomes.iter().filter(|o| o.ok).map(|o| o.bytes).sum();
+        for outcome in &outcomes {
+            if outcome.ok {
+                println!(
+                    "  {green}trashed{reset}  {:>11}  {}",
+                    human(outcome.bytes),
+                    outcome.path.display()
+                );
+            } else {
+                let err = outcome.error.as_deref().unwrap_or("failed");
+                println!(
+                    "  {red}skip{reset}     {:>11}  {} {dim}({err}){reset}",
+                    human(outcome.bytes),
+                    outcome.path.display()
+                );
+            }
+        }
+        println!("\n  {bold}Moved {} to the Trash.{reset}", human(freed));
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn render_uninstall(plan: &UninstallPlan) {
+    let Palette {
+        bold,
+        dim,
+        cyan,
+        yellow,
+        green,
+        reset,
+        ..
+    } = palette();
+
+    println!(
+        "{bold}deepscan uninstall{reset} {dim}· {}{reset}",
+        plan.app_name
+    );
+    if let Some(bundle_id) = &plan.bundle_id {
+        println!("  {dim}bundle id: {bundle_id}{reset}");
+    }
+    if let Some(app) = &plan.app_path {
+        println!(
+            "  {cyan}{:>11}{reset}  {dim}app{reset}     {}",
+            human(plan.app_bytes),
+            app.display()
+        );
+    } else {
+        println!("  {dim}(app bundle not found — showing matched leftovers only){reset}");
+    }
+
+    if plan.leftovers.is_empty() {
+        println!("  {dim}no leftover files found{reset}");
+    } else {
+        for leftover in &plan.leftovers {
+            let (label, color) = match leftover.confidence {
+                Confidence::High => ("high", green),
+                Confidence::Medium => ("med?", yellow),
+            };
+            println!(
+                "  {:>11}  {color}[{label}]{reset} {dim}{}{reset}  {}",
+                human(leftover.bytes),
+                leftover.location,
+                leftover.path.display()
+            );
+        }
+    }
+
+    println!("\n  {bold}total: {}{reset}", human(plan.total_bytes));
 }
 
 fn render_space(root: &Path, report: &SpaceReport) {

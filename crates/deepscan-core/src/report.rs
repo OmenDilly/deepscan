@@ -102,6 +102,45 @@ pub struct DuplicateGroup {
     pub paths: Vec<PathBuf>,
 }
 
+/// How sure we are a leftover belongs to the app being uninstalled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Confidence {
+    /// Name contains the app's full bundle id.
+    High,
+    /// Name starts with the app's name — review before removing.
+    Medium,
+}
+
+/// One leftover support file/dir an app left behind (the `uninstall` command).
+#[derive(Debug, Clone, Serialize)]
+pub struct Leftover {
+    pub path: PathBuf,
+    pub bytes: u64,
+    pub confidence: Confidence,
+    pub location: String,
+}
+
+/// The app bundle plus all of its leftovers — the uninstall plan.
+#[derive(Debug, Clone, Serialize)]
+pub struct UninstallPlan {
+    pub app_name: String,
+    pub bundle_id: Option<String>,
+    pub app_path: Option<PathBuf>,
+    pub app_bytes: u64,
+    pub leftovers: Vec<Leftover>,
+    pub total_bytes: u64,
+}
+
+/// Result of moving one uninstall target to the Trash.
+#[derive(Debug, Clone, Serialize)]
+pub struct UninstallOutcome {
+    pub path: PathBuf,
+    pub bytes: u64,
+    pub ok: bool,
+    pub error: Option<String>,
+}
+
 /// The full result of a `scan` — the JSON payload, and the source the human
 /// renderer reads from.
 #[derive(Debug, Clone, Serialize)]
