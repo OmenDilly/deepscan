@@ -326,18 +326,19 @@ dependencies = [
 
 [[package]]
 name = "deepscan-cli"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "clap",
  "deepscan-core",
  "ratatui",
+ "rayon",
  "serde_json",
 ]
 
 [[package]]
 name = "deepscan-core"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "blake3",

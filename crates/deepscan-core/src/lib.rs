@@ -27,7 +27,8 @@ pub use report::{
     ScanReport, Severity, SpaceReport, TreeNode, UninstallOutcome, UninstallPlan,
 };
 pub use scan::{
-    build_tree, count_matching_files, measure_path, progress, reset_progress, scan_children,
+    build_tree, count_matching_files, measure_path, measure_path_serial, progress, reset_progress,
+    scan_children,
 };
 pub use signatures::{
     default_signatures, evaluate_signatures, load_signatures, parse_signatures, Signature,

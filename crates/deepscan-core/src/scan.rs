@@ -97,6 +97,36 @@ fn sum_dir<'scope>(dir: PathBuf, total: &'scope AtomicU64, scope: &Scope<'scope>
     }
 }
 
+/// Single-threaded total size — for use *inside* a parallel per-item sizer
+/// (e.g. the explorer sizing each folder concurrently), so we don't nest rayon
+/// inside rayon. Symlinks are skipped, exactly like [`measure_path`].
+pub fn measure_path_serial(path: &Path) -> u64 {
+    let meta = match fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(_) => return 0,
+    };
+    let file_type = meta.file_type();
+    if file_type.is_symlink() {
+        return 0;
+    }
+    if file_type.is_file() {
+        return meta.len();
+    }
+    if !file_type.is_dir() {
+        return 0;
+    }
+
+    let mut total = 0u64;
+    for entry in read_dir_lite(path) {
+        match entry.kind {
+            EntryKind::File(size) => total += size,
+            EntryKind::Dir => total += measure_path_serial(&path.join(&entry.name)),
+            EntryKind::Skip => {}
+        }
+    }
+    total
+}
+
 /// Count files under `dir` whose file name matches `pattern` (e.g. the
 /// `CFNetworkDownload_*.tmp` fragments of the idleassetsd leak).
 pub fn count_matching_files(dir: &Path, pattern: &Pattern) -> u64 {
