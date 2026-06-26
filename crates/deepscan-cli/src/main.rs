@@ -12,9 +12,9 @@ use clap::{Parser, Subcommand};
 use deepscan_core::{
     analyze_container, build_reclaim_plan, build_report, default_signatures, default_zones,
     detect_anomalies, execute_reclaim, execute_uninstall, find_duplicates, find_large_files,
-    home_dir, human, load_signatures, plan_uninstall, progress, reset_progress, scan_children,
-    space_report, Confidence, DuplicateGroup, ReclaimPlan, ScanReport, Severity, SpaceReport,
-    TreeNode, UninstallPlan,
+    home_dir, human, load_signatures, plan_uninstall, progress, reset_progress, space_report,
+    Confidence, DuplicateGroup, ReclaimPlan, ScanReport, Severity, SpaceReport, TreeNode,
+    UninstallPlan,
 };
 
 mod tui;
@@ -353,10 +353,7 @@ fn main() -> anyhow::Result<ExitCode> {
             json,
         } => run_uninstall(app, apply, yes, json),
         Commands::Explore { path } => {
-            let root = path.unwrap_or_else(home);
-            let scan_root = root.clone();
-            let (_, items) = with_spinner("scanning", move || scan_children(&scan_root))?;
-            tui::run(root, items)?;
+            tui::run(path.unwrap_or_else(home))?;
             Ok(ExitCode::SUCCESS)
         }
     }
