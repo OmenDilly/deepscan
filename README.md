@@ -33,6 +33,7 @@ deepscan scan                 # fast (~seconds): reclaimable space + leak signat
 deepscan scan --tree          # also walk the whole tree — where did the space go?
 deepscan scan ~/Library/Developer --depth 3   # nested size tree of a directory
 deepscan scan --json | jq .   # machine-readable, for scripts/CI
+deepscan explore              # interactive size explorer (navigate with arrow keys)
 
 deepscan space                # honest disk accounting: capacity + the "System Data" gap
 deepscan large --older 90     # biggest files you haven't modified in 90+ days
@@ -62,6 +63,7 @@ deepscan reclaim --apply      # free regenerable caches (asks first)
 | `deepscan large [PATH]` | Largest files, optionally only old ones (`--older N`, `--min-mb`). |
 | `deepscan dupes [PATH]` | Exact duplicate files (size-bucket + BLAKE3; zero false positives). |
 | `deepscan uninstall <APP>` | An app + its leftover support files (confidence-tiered). Dry-run; `--apply` moves them to the Trash (recoverable). |
+| `deepscan explore [PATH]` | Interactive size explorer — drill the tree with the arrow keys (a "CLI DaisyDisk"). `↑↓` move · `→` enter · `←` back · `q` quit. |
 
 Run `deepscan help <command>` (or `<command> --help`) for the full flag list.
 Every command supports `--json`.
