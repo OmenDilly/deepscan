@@ -43,9 +43,15 @@ pub fn build_report(
     children.retain(|child| child.bytes > 0);
     children.truncate(top);
 
-    let buckets = evaluate_catalog(&default_catalog());
+    // The reclaimable catalog and leak signatures are home-wide surveys. When
+    // the scan is scoped to a subpath, keep only what actually lives under it —
+    // so every number in the report pertains to the path the user asked about,
+    // instead of silently reporting the whole home.
+    let mut buckets = evaluate_catalog(&default_catalog());
+    let mut findings = evaluate_signatures(signatures);
+    buckets.retain(|bucket| bucket.path.starts_with(root));
+    findings.retain(|finding| finding.path.starts_with(root));
     let reclaimable_bytes = buckets.iter().map(|bucket| bucket.bytes).sum();
-    let findings = evaluate_signatures(signatures);
 
     Ok(ScanReport {
         root: root.to_path_buf(),

@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use deepscan_core::{human, measure_path_serial};
+use deepscan_core::{disk_space, human, measure_path_serial, DiskSpace};
 use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::crossterm::execute;
@@ -55,6 +55,9 @@ struct Level {
 struct Explorer {
     stack: Vec<Level>,
     cache: HashMap<PathBuf, Vec<Entry>>,
+    /// True capacity of the volume the root lives on — so the root view can be
+    /// honest that a folder tree is only *part* of the disk macOS reports.
+    disk: Option<DiskSpace>,
 }
 
 /// Size every directory in `dirs` in parallel, streaming each result back as it
@@ -244,9 +247,11 @@ pub fn run(root: PathBuf) -> anyhow::Result<()> {
     execute!(stdout, EnterAlternateScreen)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout))?;
 
+    let disk = disk_space(&root);
     let explorer = Explorer {
         stack: vec![build_level(root, &HashMap::new())],
         cache: HashMap::new(),
+        disk,
     };
     let outcome = event_loop(&mut terminal, explorer);
 
@@ -286,9 +291,10 @@ fn event_loop<B: Backend>(
 
 fn draw(frame: &mut Frame, explorer: &Explorer, tick: usize) {
     let chunks = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Min(1),
-        Constraint::Length(1),
+        Constraint::Length(1), // path + tree total
+        Constraint::Length(1), // reconciliation against the whole volume
+        Constraint::Min(1),    // entries
+        Constraint::Length(1), // key hints
     ])
     .split(frame.area());
 
@@ -312,6 +318,32 @@ fn draw(frame: &mut Frame, explorer: &Explorer, tick: usize) {
         )
     };
     frame.render_widget(Paragraph::new(Line::from(header)).bold(), chunks[0]);
+
+    // At the root, reconcile this tree against the whole volume so we never
+    // silently imply the folder total *is* the disk. Deeper levels leave it
+    // blank — "elsewhere" only means something relative to the root.
+    let at_root = explorer.stack.len() == 1;
+    let recon = match (&explorer.disk, at_root) {
+        (Some(disk), true) if level.pending == 0 => {
+            let tree: u64 = level.items.iter().filter_map(|e| e.bytes).sum();
+            let pct = tree.saturating_mul(100).checked_div(disk.used).unwrap_or(0);
+            let elsewhere = disk.used.saturating_sub(tree);
+            format!(
+                " volume {} used of {} · this tree is {}% · {} elsewhere (system files + snapshots — see: deepscan space)",
+                human(disk.used),
+                human(disk.total),
+                pct,
+                human(elsewhere),
+            )
+        }
+        (Some(disk), true) => format!(
+            " volume {} used of {} · sizing this tree…",
+            human(disk.used),
+            human(disk.total),
+        ),
+        _ => String::new(),
+    };
+    frame.render_widget(Paragraph::new(Line::from(recon)).dim(), chunks[1]);
 
     let max = level
         .items
@@ -356,11 +388,11 @@ fn draw(frame: &mut Frame, explorer: &Explorer, tick: usize) {
     if !level.items.is_empty() {
         state.select(Some(level.selected));
     }
-    frame.render_stateful_widget(list, chunks[1], &mut state);
+    frame.render_stateful_widget(list, chunks[2], &mut state);
 
     frame.render_widget(
-        Paragraph::new(" ↑↓ move   → enter   ← back   q quit").dim(),
-        chunks[2],
+        Paragraph::new(" ↑↓ move   → enter   ← back   q quit   (explore / for whole disk)").dim(),
+        chunks[3],
     );
 }
 
@@ -391,6 +423,7 @@ mod tests {
         Explorer {
             stack: vec![level(items)],
             cache: HashMap::new(),
+            disk: None,
         }
     }
 

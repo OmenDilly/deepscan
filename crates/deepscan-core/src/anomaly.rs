@@ -1,20 +1,34 @@
-//! Baseline learning v1 — local-distribution anomaly detection.
+//! Biggest same-class folders, honestly classified.
 //!
-//! Static signatures catch *known* leaks. This catches *unknown* ones: in a
-//! "zone" full of same-class sibling directories (per-bundle temp dirs,
-//! caches, app containers), a leak shows up as a wild size outlier. The
-//! baseline is *learned from the siblings* (their median), not hand-coded — so
-//! a future idleassetsd-style leak is flagged without anyone writing a
-//! signature first.
+//! In a "zone" full of same-class sibling directories (caches, per-bundle temp
+//! dirs, app containers), the heavy children stand out. We surface them — but
+//! the honest signal is **what kind of folder it is**, not "N× the sibling
+//! median". That multiple is degenerate on the heavy-tailed size distributions
+//! these zones always have (a handful of GB-scale apps among hundreds of KB-
+//! scale config dirs), so it reads as astronomical for *every* large folder on
+//! *every* Mac and means nothing.
 //!
-//! v1 learns from the local machine's siblings. A future version can compare
-//! against a community median per directory (cross-machine).
+//! Instead we cross-reference each folder against the reclaimable catalog and
+//! the known cache/temp locations:
+//!   • [`AnomalyKind::Cache`]   — regenerable, safe to clear. Expected to be
+//!     big; never alarming. Severity is always `Info`.
+//!   • [`AnomalyKind::AppData`] — real app state (Application Support /
+//!     Containers / Group Containers). A large unexplained one is the thing
+//!     actually worth a look, so severity scales with size.
+//!
+//! A large idleassetsd-style leak still surfaces — as a big *AppData* folder
+//! that isn't a known cache — which is exactly the case worth investigating.
+//! The sibling median is kept in the payload for reference, not as the headline.
+//!
+//! A future version can compare against a community median per class
+//! (cross-machine) — the only comparison that turns "big" into "abnormal".
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+use crate::catalog::default_catalog;
 use crate::report::Severity;
 use crate::scan::measure_path;
 use crate::signatures::expand_paths;
@@ -24,6 +38,19 @@ const GB: u64 = 1024 * MB;
 
 /// Flag a child this many times larger than the sibling median (when non-zero).
 const RATIO_THRESHOLD: f64 = 10.0;
+
+/// What kind of heavy folder this is — the honest classification that replaces
+/// the meaningless median multiple.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AnomalyKind {
+    /// A cache / per-user temp dir: regenerable, safe to clear. Expected to be
+    /// large — informational, never a problem.
+    Cache,
+    /// App state (Application Support / Containers / Group Containers): real
+    /// data, not auto-clearable. A big one is worth checking before removing.
+    AppData,
+}
 
 pub struct Zone {
     pub name: &'static str,
@@ -75,9 +102,12 @@ pub struct Anomaly {
     pub name: String,
     pub path: PathBuf,
     pub bytes: u64,
+    /// Cache (safe to clear) vs app data (review) — the honest headline.
+    pub kind: AnomalyKind,
     pub median_bytes: u64,
-    /// Size relative to the sibling median; `None` when the median is 0
-    /// (a lone outlier among otherwise-empty siblings — the idleassetsd shape).
+    /// Size relative to the sibling median. Kept for reference only — it is
+    /// degenerate on these heavy-tailed distributions and is no longer the
+    /// basis for severity. `None` when the median is 0 (a lone outlier).
     pub ratio: Option<f64>,
     pub siblings: usize,
     pub severity: Severity,
@@ -119,6 +149,7 @@ pub fn analyze_container(zone: &str, container: &Path, floor: u64) -> Vec<Anomal
         } else {
             Some(bytes as f64 / median as f64)
         };
+        let kind = classify(path);
         anomalies.push(Anomaly {
             zone: zone.to_string(),
             name: path
@@ -127,13 +158,47 @@ pub fn analyze_container(zone: &str, container: &Path, floor: u64) -> Vec<Anomal
                 .unwrap_or_default(),
             path: path.clone(),
             bytes,
+            kind,
             median_bytes: median,
             ratio,
             siblings: children.len(),
-            severity: severity_for(bytes, ratio),
+            severity: severity_for(kind, bytes),
         });
     }
     anomalies
+}
+
+/// Cache (regenerable, safe to clear) vs real app data, decided from the path:
+/// a known cache/temp location, or a `safe_auto` cache entry in the reclaimable
+/// catalog, is a cache; everything else is app data worth reviewing.
+fn classify(path: &Path) -> AnomalyKind {
+    if is_reclaimable_cache(path) {
+        AnomalyKind::Cache
+    } else {
+        AnomalyKind::AppData
+    }
+}
+
+fn is_reclaimable_cache(path: &Path) -> bool {
+    // Structural: `~/Library/Caches`, any `Caches` ancestor, and everything
+    // under the per-user temp scratch (`/var/folders/**`, both the `T` and `C`
+    // dirs) is regenerable by definition.
+    let text = path.to_string_lossy();
+    if text.contains("/Library/Caches/")
+        || text.contains("/var/folders/")
+        || path
+            .ancestors()
+            .any(|a| a.file_name().and_then(|n| n.to_str()) == Some("Caches"))
+    {
+        return true;
+    }
+    // Catalog cross-reference: inside a known safe-to-clear cache location.
+    default_catalog().iter().any(|entry| {
+        entry.safe_auto && entry.category == "cache" && {
+            let root = PathBuf::from(shellexpand::tilde(entry.path).into_owned());
+            path == root || path.starts_with(&root)
+        }
+    })
 }
 
 fn sized_children(container: &Path) -> Vec<(PathBuf, u64)> {
@@ -170,14 +235,15 @@ fn median_bytes(children: &[(PathBuf, u64)]) -> u64 {
     }
 }
 
-fn severity_for(bytes: u64, ratio: Option<f64>) -> Severity {
-    let ratio = ratio.unwrap_or(f64::INFINITY);
-    if bytes >= 20 * GB || ratio >= 100.0 {
-        Severity::Critical
-    } else if bytes >= 2 * GB || ratio >= 25.0 {
-        Severity::Warn
-    } else {
-        Severity::Info
+/// Severity from what the folder *is*, not from the (degenerate) median ratio.
+/// A cache is safe and expected — never more than informational. App data is
+/// the real signal, so a big unexplained one escalates with size.
+fn severity_for(kind: AnomalyKind, bytes: u64) -> Severity {
+    match kind {
+        AnomalyKind::Cache => Severity::Info,
+        AnomalyKind::AppData if bytes >= 10 * GB => Severity::Critical,
+        AnomalyKind::AppData if bytes >= 2 * GB => Severity::Warn,
+        AnomalyKind::AppData => Severity::Info,
     }
 }
 
@@ -203,5 +269,40 @@ mod tests {
         assert_eq!(anomalies[0].siblings, 4);
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn classifies_caches_vs_app_data() {
+        // Caches, any `Caches` ancestor, and per-user temp scratch are caches.
+        assert_eq!(
+            classify(Path::new("/Users/x/Library/Caches/com.spotify.client")),
+            AnomalyKind::Cache
+        );
+        assert_eq!(
+            classify(Path::new("/private/var/folders/aa/bb/C/com.foo")),
+            AnomalyKind::Cache
+        );
+        // Application Support / Containers hold real state → app data.
+        assert_eq!(
+            classify(Path::new("/Users/x/Library/Application Support/Claude")),
+            AnomalyKind::AppData
+        );
+        assert_eq!(
+            classify(Path::new("/Users/x/Library/Group Containers/2BBY.dev.warp")),
+            AnomalyKind::AppData
+        );
+    }
+
+    #[test]
+    fn severity_tracks_kind_not_ratio() {
+        // A huge cache is still only informational — it's safe and expected.
+        assert_eq!(severity_for(AnomalyKind::Cache, 20 * GB), Severity::Info);
+        // App data escalates with size: the real signal.
+        assert_eq!(
+            severity_for(AnomalyKind::AppData, 20 * GB),
+            Severity::Critical
+        );
+        assert_eq!(severity_for(AnomalyKind::AppData, 3 * GB), Severity::Warn);
+        assert_eq!(severity_for(AnomalyKind::AppData, 500 * MB), Severity::Info);
     }
 }

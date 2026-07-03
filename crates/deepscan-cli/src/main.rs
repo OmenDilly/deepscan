@@ -13,8 +13,8 @@ use deepscan_core::{
     analyze_container, build_reclaim_plan, build_report, default_signatures, default_zones,
     detect_anomalies, execute_reclaim, execute_uninstall, find_duplicates, find_large_files,
     home_dir, human, load_signatures, plan_uninstall, progress, reset_progress, space_report,
-    Confidence, DuplicateGroup, ReclaimPlan, ScanReport, Severity, SpaceReport, TreeNode,
-    UninstallPlan,
+    AnomalyKind, Confidence, DuplicateGroup, ReclaimPlan, ScanReport, Severity, SpaceReport,
+    TreeNode, UninstallPlan,
 };
 
 mod tui;
@@ -57,14 +57,14 @@ enum Commands {
         #[arg(long)]
         exit_code: bool,
     },
-    /// Find size outliers vs sibling directories (learned baselines).
+    /// Biggest same-class folders, classified: caches (safe) vs app data (review).
     Anomalies {
         /// Analyze one directory's children instead of the default zones.
         path: Option<PathBuf>,
         /// Emit machine-readable JSON.
         #[arg(long)]
         json: bool,
-        /// Exit non-zero when outliers are found (1 = warnings, 2 = critical).
+        /// Exit non-zero when large app-data folders are found (1 = warn, 2 = critical).
         #[arg(long)]
         exit_code: bool,
     },
@@ -660,42 +660,59 @@ fn run_anomalies(path: Option<PathBuf>, json: bool, exit_code: bool) -> anyhow::
         dim,
         red,
         yellow,
+        green,
         reset,
         ..
     } = palette();
 
     println!(
-        "{bold}deepscan anomalies{reset} {dim}· size outliers vs sibling median (learned baseline){reset}"
+        "{bold}deepscan anomalies{reset} {dim}· biggest same-class folders — app data to review vs caches you can clear{reset}"
     );
     if anomalies.is_empty() {
-        println!("  {dim}no outliers — every sibling looks normal{reset}");
+        println!("  {dim}nothing notably large in the scanned zones{reset}");
         return Ok(code);
     }
-    for anomaly in &anomalies {
-        let (color, tag) = match anomaly.severity {
-            Severity::Critical => (red, "CRIT"),
-            Severity::Warn => (yellow, "WARN"),
-            Severity::Info => (dim, "INFO"),
-        };
+
+    // App data is the real signal (a big unexplained one is worth a look);
+    // caches are just big-and-safe. Both stay largest-first from detection.
+    let (app_data, caches): (Vec<_>, Vec<_>) = anomalies
+        .iter()
+        .partition(|anomaly| anomaly.kind == AnomalyKind::AppData);
+
+    if !app_data.is_empty() {
         println!(
-            "  {color}\u{26a0} [{tag}] {}{reset} {bold}{}{reset} {dim}in {}{reset}",
-            anomaly.name,
-            human(anomaly.bytes),
-            anomaly.zone
+            "\n{bold}App data{reset} {dim}— real state; review what's inside before removing{reset}"
         );
-        match anomaly.ratio {
-            Some(ratio) => println!(
-                "      {:.0}\u{00d7} the sibling median ({}) across {} siblings",
-                ratio,
-                human(anomaly.median_bytes),
-                anomaly.siblings
-            ),
-            None => println!(
-                "      lone outlier — sibling median is ~0 across {} siblings",
-                anomaly.siblings
-            ),
+        for anomaly in &app_data {
+            let (color, tag) = match anomaly.severity {
+                Severity::Critical => (red, "CRIT"),
+                Severity::Warn => (yellow, "WARN"),
+                Severity::Info => (dim, "INFO"),
+            };
+            println!(
+                "  {color}[{tag}]{reset} {bold}{:>9}{reset}  {}  {dim}in {}{reset}",
+                human(anomaly.bytes),
+                anomaly.name,
+                anomaly.zone
+            );
+            println!("      {dim}{}{reset}", anomaly.path.display());
         }
-        println!("      path: {}", anomaly.path.display());
+    }
+
+    if !caches.is_empty() {
+        let total: u64 = caches.iter().map(|anomaly| anomaly.bytes).sum();
+        println!(
+            "\n{bold}Caches{reset} {dim}— safe to clear, regenerate on next use ({} total · deepscan reclaim){reset}",
+            human(total)
+        );
+        for anomaly in &caches {
+            println!(
+                "  {green}{:>9}{reset}  {}  {dim}in {}{reset}",
+                human(anomaly.bytes),
+                anomaly.name,
+                anomaly.zone
+            );
+        }
     }
     Ok(code)
 }
@@ -705,6 +722,7 @@ fn render_scan(report: &ScanReport) {
         bold,
         dim,
         red,
+        green,
         yellow,
         cyan,
         reset,
@@ -721,9 +739,29 @@ fn render_scan(report: &ScanReport) {
         .iter()
         .filter(|f| f.severity == Severity::Critical)
         .count();
+    // Split the catalog by whether it's safe to auto-reclaim (regenerable
+    // caches) vs review (user files, simulator devices, linked stores). The old
+    // single "reclaimable" total over-claimed by lumping your Downloads in.
+    let safe_bytes: u64 = report
+        .buckets
+        .iter()
+        .filter(|b| b.safe_auto)
+        .map(|b| b.bytes)
+        .sum();
+    let review_bytes = report.reclaimable_bytes.saturating_sub(safe_bytes);
+    let reclaim_summary = if report.reclaimable_bytes == 0 {
+        "nothing reclaimable in known locations".to_string()
+    } else if review_bytes == 0 {
+        format!("{} safe to reclaim", human(safe_bytes))
+    } else {
+        format!(
+            "{} safe to reclaim {dim}·{reset} {bold}{} to review{reset}",
+            human(safe_bytes),
+            human(review_bytes)
+        )
+    };
     println!(
-        "{dim}summary:{reset} {bold}{}{reset} reclaimable · {} leak signature{}{}",
-        human(report.reclaimable_bytes),
+        "{dim}summary:{reset} {bold}{reclaim_summary}{reset} {dim}·{reset} {} leak signature{}{}",
         report.findings.len(),
         if report.findings.len() == 1 { "" } else { "s" },
         if critical > 0 {
@@ -770,14 +808,21 @@ fn render_scan(report: &ScanReport) {
 
     if !report.buckets.is_empty() {
         println!(
-            "\n{bold}Reclaimable buckets{reset} {dim}({} across {} locations){reset}",
-            human(report.reclaimable_bytes),
+            "\n{bold}Reclaimable buckets{reset} {dim}({} safe · {} review across {} locations){reset}",
+            human(safe_bytes),
+            human(review_bytes),
             report.buckets.len()
         );
         for bucket in &report.buckets {
+            let (tag, tag_color) = if bucket.safe_auto {
+                ("[safe]", green)
+            } else {
+                ("[review]", yellow)
+            };
             println!(
-                "  {:>11}  {cyan}{}{reset} {dim}— {}{reset}",
+                "  {:>11}  {tag_color}{:<8}{reset} {cyan}{}{reset} {dim}— {}{reset}",
                 human(bucket.bytes),
+                tag,
                 bucket.name,
                 bucket.note
             );
