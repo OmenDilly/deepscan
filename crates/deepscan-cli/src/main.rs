@@ -1067,17 +1067,58 @@ fn run_clean(
         )
     }));
 
-    if !apply && interactive(json, plain) && !rows.is_empty() {
-        let outcome = tui::run_list(
-            rows,
-            tui::Sort::Size,
-            tui::ListConfig {
-                title: "deepscan clean · caches".to_string(),
-                home: home_dir(),
-            },
-        )?;
-        report_trash(&outcome);
-        return Ok(());
+    if !apply && interactive(json, plain) {
+        // Bare `clean` (no --only) is the guided hub: caches + duplicates + old
+        // large files in one select→Trash list. `--only` stays caches-only.
+        // Headless clean (--apply/--json/--plain/piped) never gathers these —
+        // a script must not auto-Trash duplicates or old files.
+        if only.is_empty() {
+            let walk_home = home();
+            let (dupes, olds) = with_spinner("scanning duplicates + old files", move || {
+                let dupes = find_duplicates(&walk_home, 10 * 1024 * 1024);
+                let mut olds = find_large_files(&walk_home, 100 * 1024 * 1024);
+                olds.retain(|f| f.modified_days.map(|d| d >= 90).unwrap_or(false));
+                olds.truncate(40);
+                (dupes, olds)
+            });
+            for (gid, group) in dupes.iter().take(40).enumerate() {
+                for path in &group.paths {
+                    rows.push(tui::Row {
+                        bytes: group.bytes,
+                        label: path.display().to_string(),
+                        path: path.clone(),
+                        selected: false,
+                        meta: tui::RowMeta::Tag(format!("dup×{}", group.paths.len())),
+                        group: Some(gid),
+                    });
+                }
+            }
+            rows.extend(olds.iter().map(|f| {
+                tui::Row::new(
+                    f.bytes,
+                    f.path.display().to_string(),
+                    f.path.clone(),
+                    tui::RowMeta::Age(f.modified_days),
+                )
+            }));
+        }
+        if !rows.is_empty() {
+            let title = if only.is_empty() {
+                "deepscan clean · caches + duplicates + old files".to_string()
+            } else {
+                "deepscan clean · caches".to_string()
+            };
+            let outcome = tui::run_list(
+                rows,
+                tui::Sort::Size,
+                tui::ListConfig {
+                    title,
+                    home: home_dir(),
+                },
+            )?;
+            report_trash(&outcome);
+            return Ok(());
+        }
     }
 
     if !apply {
