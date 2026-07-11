@@ -130,9 +130,19 @@ pub struct ReclaimResult {
     pub freed_bytes: u64,
 }
 
-/// Delete each target (recursively), refusing any path that fails the safety
-/// guard. `home` is injected so this is testable against a temp fixture.
+/// Move each target to the Trash, refusing any path that fails the safety
+/// guard. Delegates to [`execute_reclaim_with`] using [`crate::move_to_trash`].
 pub fn execute_reclaim(targets: &[ReclaimTarget], home: Option<&Path>) -> ReclaimResult {
+    execute_reclaim_with(targets, home, crate::move_to_trash)
+}
+
+/// Testable core: `delete` is injected so tests assert the guard without
+/// touching the real Trash.
+pub fn execute_reclaim_with(
+    targets: &[ReclaimTarget],
+    home: Option<&Path>,
+    delete: impl Fn(&Path) -> Result<(), String>,
+) -> ReclaimResult {
     let mut deleted = Vec::new();
     let mut freed_bytes = 0u64;
 
@@ -147,7 +157,7 @@ pub fn execute_reclaim(targets: &[ReclaimTarget], home: Option<&Path>) -> Reclai
             });
             continue;
         }
-        match std::fs::remove_dir_all(&target.path) {
+        match delete(&target.path) {
             Ok(()) => {
                 freed_bytes += target.bytes;
                 deleted.push(ReclaimOutcome {
@@ -163,7 +173,7 @@ pub fn execute_reclaim(targets: &[ReclaimTarget], home: Option<&Path>) -> Reclai
                 path: target.path.clone(),
                 bytes: target.bytes,
                 ok: false,
-                error: Some(err.to_string()),
+                error: Some(err),
             }),
         }
     }
@@ -249,7 +259,11 @@ mod tests {
         ];
 
         // home far away so the fixture passes the guard but is still isolated.
-        let result = execute_reclaim(&targets, Some(Path::new("/nonexistent-home")));
+        // Use a fake deleter (not the real Trash) so this test asserts the
+        // safety guard without polluting Trash.
+        let result = execute_reclaim_with(&targets, Some(Path::new("/nonexistent-home")), |path| {
+            std::fs::remove_dir_all(path).map_err(|e| e.to_string())
+        });
 
         assert_eq!(result.freed_bytes, 1024);
         assert!(!victim.exists(), "safe target should be deleted");
