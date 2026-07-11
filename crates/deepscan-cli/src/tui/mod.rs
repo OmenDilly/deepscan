@@ -12,11 +12,12 @@ mod widget;
 pub use tree::run;
 pub use widget::{Row, RowMeta, Sort};
 
+use std::collections::HashSet;
 use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use ratatui::backend::CrosstermBackend;
+use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
@@ -40,10 +41,24 @@ pub fn run_list(rows: Vec<Row>, sort: Sort, config: ListConfig) -> anyhow::Resul
     execute!(stdout, EnterAlternateScreen)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout))?;
 
-    let mut state = ListState::new(rows, sort);
+    // Capture the loop's result, then ALWAYS restore the terminal before
+    // returning — so an IO error mid-session never leaves the shell in raw
+    // mode / the alternate screen (mirrors tree.rs::run / event_loop).
+    let outcome = list_loop(&mut terminal, ListState::new(rows, sort), &config);
+
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    terminal.show_cursor()?;
+    outcome
+}
+
+fn list_loop<B: Backend>(
+    terminal: &mut Terminal<B>,
+    mut state: ListState,
+    config: &ListConfig,
+) -> anyhow::Result<TrashOutcome> {
     let mut confirming = false;
     let mut outcome = TrashOutcome::default();
-
     loop {
         terminal.draw(|f| render::draw(f, &state, &config.title, confirming))?;
         if !event::poll(Duration::from_millis(120))? {
@@ -62,11 +77,10 @@ pub fn run_list(rows: Vec<Row>, sort: Sort, config: ListConfig) -> anyhow::Resul
                         .selected()
                         .map(|r| (r.path.clone(), r.bytes))
                         .collect();
-                    outcome = trash_selected(&items, config.home.as_deref());
-                    let trashed: std::collections::HashSet<PathBuf> =
-                        items.iter().map(|(p, _)| p.clone()).collect();
-                    let failed: std::collections::HashSet<PathBuf> =
-                        outcome.failures.iter().map(|(p, _)| p.clone()).collect();
+                    let round = trash_selected(&items, config.home.as_deref());
+                    let trashed: HashSet<PathBuf> = items.iter().map(|(p, _)| p.clone()).collect();
+                    let failed: HashSet<PathBuf> =
+                        round.failures.iter().map(|(p, _)| p.clone()).collect();
                     state
                         .rows
                         .retain(|r| !trashed.contains(&r.path) || failed.contains(&r.path));
@@ -74,6 +88,8 @@ pub fn run_list(rows: Vec<Row>, sort: Sort, config: ListConfig) -> anyhow::Resul
                         r.selected = false;
                     }
                     state.cursor = state.cursor.min(state.rows.len().saturating_sub(1));
+                    outcome.freed_bytes += round.freed_bytes;
+                    outcome.failures.extend(round.failures);
                     confirming = false;
                 }
                 KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => confirming = false,
@@ -107,9 +123,5 @@ pub fn run_list(rows: Vec<Row>, sort: Sort, config: ListConfig) -> anyhow::Resul
             _ => {}
         }
     }
-
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
     Ok(outcome)
 }
