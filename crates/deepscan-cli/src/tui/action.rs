@@ -1,11 +1,12 @@
 //! Side-effecting actions for the interactive views: move selected items to the
-//! Trash (guarded by `is_safe_to_delete`), and reveal a path in Finder. The
-//! Trash call is injectable so the guard is unit-tested without touching Trash.
+//! Trash (guarded by `is_safe_to_trash` — the human-confirmed backstop, looser
+//! than the automated-reclaim guard), and reveal a path in Finder. The Trash
+//! call is injectable so the guard is unit-tested without touching Trash.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use deepscan_core::{is_safe_to_delete, move_to_trash};
+use deepscan_core::{is_safe_to_trash, move_to_trash};
 
 #[derive(Debug, Default)]
 pub struct TrashOutcome {
@@ -25,7 +26,7 @@ pub fn trash_selected_with(
 ) -> TrashOutcome {
     let mut outcome = TrashOutcome::default();
     for (path, bytes) in items {
-        if !is_safe_to_delete(path, home) {
+        if !is_safe_to_trash(path, home) {
             outcome
                 .failures
                 .push((path.clone(), "refused: failed safety guard".into()));
@@ -63,5 +64,19 @@ mod tests {
         assert_eq!(outcome.freed_bytes, 100);
         assert_eq!(outcome.failures.len(), 1, "root refused");
         assert_eq!(deleted.borrow().len(), 1, "only the safe path was deleted");
+    }
+
+    #[test]
+    fn trashes_app_bundle_in_applications() {
+        let home = PathBuf::from("/Users/tester");
+        let items = vec![(PathBuf::from("/Applications/Docker.app"), 500u64)];
+        let deleted = std::cell::RefCell::new(Vec::new());
+        let outcome = trash_selected_with(&items, Some(&home), |p| {
+            deleted.borrow_mut().push(p.to_path_buf());
+            Ok(())
+        });
+        assert_eq!(outcome.freed_bytes, 500);
+        assert!(outcome.failures.is_empty());
+        assert_eq!(deleted.borrow().len(), 1);
     }
 }

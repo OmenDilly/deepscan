@@ -21,7 +21,7 @@ pub use catalog::{default_catalog, evaluate_catalog, CatalogEntry};
 pub use deletion::move_to_trash;
 pub use engine::{
     build_reclaim_plan, build_report, execute_reclaim, execute_reclaim_with, home_dir,
-    is_safe_to_delete, ReclaimOutcome, ReclaimPlan, ReclaimResult, ReclaimTarget,
+    is_safe_to_delete, is_safe_to_trash, ReclaimOutcome, ReclaimPlan, ReclaimResult, ReclaimTarget,
 };
 pub use files::{find_duplicates, find_large_files};
 pub use report::{

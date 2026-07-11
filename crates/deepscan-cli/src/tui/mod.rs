@@ -6,6 +6,7 @@ mod render;
 mod tree;
 mod widget;
 
+pub use action::TrashOutcome;
 pub use tree::run;
 pub use widget::{Row, RowMeta, Sort};
 
@@ -22,7 +23,7 @@ use ratatui::crossterm::terminal::{
 };
 use ratatui::Terminal;
 
-use action::{reveal_in_finder, trash_selected, TrashOutcome};
+use action::{reveal_in_finder, trash_selected};
 use widget::ListState;
 
 pub struct ListConfig {

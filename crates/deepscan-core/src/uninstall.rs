@@ -12,7 +12,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::engine::home_dir;
+use crate::engine::{home_dir, is_safe_to_trash};
 use crate::report::{Confidence, Leftover, UninstallOutcome, UninstallPlan};
 use crate::scan::measure_path;
 
@@ -71,21 +71,32 @@ pub fn execute_uninstall(plan: &UninstallPlan) -> Vec<UninstallOutcome> {
         targets.push((leftover.path.clone(), leftover.bytes));
     }
 
+    let home = home_dir();
     targets
         .into_iter()
-        .map(|(path, bytes)| match trash::delete(&path) {
-            Ok(()) => UninstallOutcome {
-                path,
-                bytes,
-                ok: true,
-                error: None,
-            },
-            Err(err) => UninstallOutcome {
-                path,
-                bytes,
-                ok: false,
-                error: Some(err.to_string()),
-            },
+        .map(|(path, bytes)| {
+            if !is_safe_to_trash(&path, home.as_deref()) {
+                return UninstallOutcome {
+                    path,
+                    bytes,
+                    ok: false,
+                    error: Some("refused: failed safety guard".to_string()),
+                };
+            }
+            match trash::delete(&path) {
+                Ok(()) => UninstallOutcome {
+                    path,
+                    bytes,
+                    ok: true,
+                    error: None,
+                },
+                Err(err) => UninstallOutcome {
+                    path,
+                    bytes,
+                    ok: false,
+                    error: Some(err.to_string()),
+                },
+            }
         })
         .collect()
 }

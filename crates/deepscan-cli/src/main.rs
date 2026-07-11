@@ -205,6 +205,18 @@ fn interactive(json: bool, plain: bool) -> bool {
     !json && !plain && std::io::stdout().is_terminal()
 }
 
+/// Report the result of an interactive Trash: freed total, then any per-item
+/// failures (guard refusals, permission/SIP errors) so a partial failure is
+/// never silent.
+fn report_trash(outcome: &tui::TrashOutcome) {
+    if outcome.freed_bytes > 0 {
+        println!("Moved {} to the Trash.", human(outcome.freed_bytes));
+    }
+    for (path, err) in &outcome.failures {
+        eprintln!("skip  {}  ({err})", path.display());
+    }
+}
+
 /// Map the highest finding severity to a process exit code: 2 critical,
 /// 1 warning, 0 otherwise (clean, or info-only).
 fn exit_code_for(max: Option<Severity>) -> ExitCode {
@@ -418,9 +430,7 @@ fn run_large(
                 home: home_dir(),
             },
         )?;
-        if outcome.freed_bytes > 0 {
-            println!("Moved {} to the Trash.", human(outcome.freed_bytes));
-        }
+        report_trash(&outcome);
         return Ok(ExitCode::SUCCESS);
     }
 
@@ -497,12 +507,7 @@ fn run_dupes(
                 home: home_dir(),
             },
         )?;
-        if outcome.freed_bytes > 0 {
-            println!(
-                "Moved {} of duplicates to the Trash.",
-                human(outcome.freed_bytes)
-            );
-        }
+        report_trash(&outcome);
         return Ok(ExitCode::SUCCESS);
     }
 
@@ -590,9 +595,7 @@ fn run_uninstall(app: String, apply: bool, yes: bool, json: bool) -> anyhow::Res
                     home: home_dir(),
                 },
             )?;
-            if outcome.freed_bytes > 0 {
-                println!("Moved {} to the Trash.", human(outcome.freed_bytes));
-            }
+            report_trash(&outcome);
             return Ok(ExitCode::SUCCESS);
         }
         if json {
@@ -1022,27 +1025,28 @@ fn run_clean(
         filter_plan(plan, &only)
     };
 
-    if !apply && interactive(json, plain) {
-        let mut rows: Vec<tui::Row> = plan
-            .auto_targets
-            .iter()
-            .map(|t| {
-                tui::Row::new(
-                    t.bytes,
-                    t.name.clone(),
-                    t.path.clone(),
-                    tui::RowMeta::Tag("safe".into()),
-                )
-            })
-            .collect();
-        rows.extend(plan.manual_targets.iter().map(|t| {
+    let mut rows: Vec<tui::Row> = plan
+        .auto_targets
+        .iter()
+        .map(|t| {
             tui::Row::new(
                 t.bytes,
                 t.name.clone(),
                 t.path.clone(),
-                tui::RowMeta::Tag("review".into()),
+                tui::RowMeta::Tag("safe".into()),
             )
-        }));
+        })
+        .collect();
+    rows.extend(plan.manual_targets.iter().map(|t| {
+        tui::Row::new(
+            t.bytes,
+            t.name.clone(),
+            t.path.clone(),
+            tui::RowMeta::Tag("review".into()),
+        )
+    }));
+
+    if !apply && interactive(json, plain) && !rows.is_empty() {
         let outcome = tui::run_list(
             rows,
             tui::Sort::Size,
@@ -1051,9 +1055,7 @@ fn run_clean(
                 home: home_dir(),
             },
         )?;
-        if outcome.freed_bytes > 0 {
-            println!("Moved {} to the Trash.", human(outcome.freed_bytes));
-        }
+        report_trash(&outcome);
         return Ok(());
     }
 
@@ -1108,7 +1110,7 @@ fn run_clean(
     if json {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
-        println!("\n{bold}deepscan reclaim{reset} {dim}· applying{reset}");
+        println!("\n{bold}deepscan clean{reset} {dim}· applying{reset}");
         for outcome in &result.deleted {
             if outcome.ok {
                 println!(
@@ -1139,7 +1141,7 @@ fn render_plan(plan: &ReclaimPlan, with_hint: bool) {
         ..
     } = palette();
 
-    println!("{bold}deepscan reclaim{reset} {dim}· dry run (nothing deleted){reset}");
+    println!("{bold}deepscan clean{reset} {dim}· dry run (nothing deleted){reset}");
 
     if plan.auto_targets.is_empty() {
         println!("\n{dim}Nothing safe to reclaim automatically.{reset}");

@@ -207,6 +207,32 @@ pub fn is_safe_to_delete(path: &Path, home: Option<&Path>) -> bool {
     true
 }
 
+/// Backstop for **human-confirmed / plan-vetted** deletes (the interactive
+/// views and `uninstall`). Looser than [`is_safe_to_delete`] (which guards
+/// fully-automated reclaim): it allows a top-level app bundle like
+/// `/Applications/Foo.app` (3 components) that the automated guard rejects,
+/// while still refusing the catastrophic — root, top-level dirs, the home dir
+/// itself, relative paths, and anything with `..`.
+pub fn is_safe_to_trash(path: &Path, home: Option<&Path>) -> bool {
+    if !path.is_absolute() {
+        return false;
+    }
+    if path.components().any(|c| matches!(c, Component::ParentDir)) {
+        return false;
+    }
+    // RootDir + at least 2 named components (3 total): refuses `/`,
+    // `/Applications`, `/Users`, `/usr`, … but allows `/Applications/Foo.app`.
+    if path.components().count() < 3 {
+        return false;
+    }
+    if let Some(home) = home {
+        if path == home {
+            return false;
+        }
+    }
+    true
+}
+
 pub fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
 }
@@ -228,6 +254,28 @@ mod tests {
         ));
         assert!(is_safe_to_delete(
             Path::new("/Users/tester/Library/Caches"),
+            Some(&home)
+        ));
+    }
+
+    #[test]
+    fn trash_guard_allows_app_bundles_but_refuses_catastrophic() {
+        let home = PathBuf::from("/Users/tester");
+        assert!(is_safe_to_trash(
+            Path::new("/Applications/Docker.app"),
+            Some(&home)
+        ));
+        assert!(is_safe_to_trash(
+            Path::new("/Users/tester/Library/Caches/x"),
+            Some(&home)
+        ));
+        assert!(!is_safe_to_trash(Path::new("/"), Some(&home)));
+        assert!(!is_safe_to_trash(Path::new("/Applications"), Some(&home)));
+        assert!(!is_safe_to_trash(Path::new("/Users"), Some(&home)));
+        assert!(!is_safe_to_trash(Path::new("/Users/tester"), Some(&home)));
+        assert!(!is_safe_to_trash(Path::new("relative"), Some(&home)));
+        assert!(!is_safe_to_trash(
+            Path::new("/Users/tester/../etc"),
             Some(&home)
         ));
     }
