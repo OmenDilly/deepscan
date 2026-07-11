@@ -247,18 +247,28 @@ pub fn run(root: PathBuf) -> anyhow::Result<()> {
     execute!(stdout, EnterAlternateScreen)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout))?;
 
+    let outcome = explore_at(&mut terminal, root);
+
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    terminal.show_cursor()?;
+    outcome
+}
+
+/// Run the explore browser on a terminal the caller already set up (raw mode +
+/// alternate screen). Lets the dashboard drill in without re-initializing the
+/// terminal — no flicker. Returns when the user quits the browser (`q`/Esc).
+pub(crate) fn explore_at<B: Backend>(
+    terminal: &mut Terminal<B>,
+    root: PathBuf,
+) -> anyhow::Result<()> {
     let disk = disk_space(&root);
     let explorer = Explorer {
         stack: vec![build_level(root, &HashMap::new())],
         cache: HashMap::new(),
         disk,
     };
-    let outcome = event_loop(&mut terminal, explorer);
-
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
-    outcome
+    event_loop(terminal, explorer)
 }
 
 fn event_loop<B: Backend>(
