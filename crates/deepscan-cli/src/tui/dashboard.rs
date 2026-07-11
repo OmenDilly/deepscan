@@ -8,13 +8,6 @@
 //! is a pure state machine (unit-tested without a terminal); the ratatui layer
 //! (Task 3) is a thin renderer.
 
-// TODO(phase2): remove once Task 4 wires `run_dashboard`/`assemble_dashboard`
-// into `main.rs`'s interactive `scan` branch — this whole module is still
-// unreferenced from the bin crate's `main` until then, so `-D warnings`
-// dead-code lints fire on all of it despite everything being consumed
-// internally by Task 3's render/loop.
-#![allow(dead_code)]
-
 use std::io;
 use std::path::PathBuf;
 use std::time::Duration;

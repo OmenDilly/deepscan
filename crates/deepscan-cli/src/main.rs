@@ -56,6 +56,9 @@ enum Commands {
         /// Exit non-zero when leaks are found (1 = warnings, 2 = critical).
         #[arg(long)]
         exit_code: bool,
+        /// Force the plain printed report even in a terminal.
+        #[arg(long)]
+        plain: bool,
     },
     /// Biggest same-class folders, classified: caches (safe) vs app data (review).
     Anomalies {
@@ -313,6 +316,7 @@ fn main() -> anyhow::Result<ExitCode> {
             signatures,
             json,
             exit_code,
+            plain,
         } => {
             let root = path.unwrap_or_else(home);
             let signatures = match signatures {
@@ -322,6 +326,23 @@ fn main() -> anyhow::Result<ExitCode> {
             let depth = if tree { depth.max(1) } else { depth };
             let depth = depth.min(6);
             let include_tree = depth >= 1;
+            if interactive(json, plain) {
+                // The dashboard does extra work (anomalies + biggest files) the
+                // fast default scan skips — fine, opening it is interactive.
+                let report = build_report(&root, top, false, 0, &signatures)?;
+                let root_for_walk = root.clone();
+                let (anomalies, largest, snapshots) = with_spinner("scanning", move || {
+                    let anomalies = detect_anomalies(&default_zones());
+                    let mut largest = find_large_files(&root_for_walk, 100 * 1024 * 1024);
+                    largest.truncate(12);
+                    let snapshots = space_report(&root_for_walk).snapshots.len();
+                    (anomalies, largest, snapshots)
+                });
+                let dashboard =
+                    tui::assemble_dashboard(root, &report, &anomalies, &largest, snapshots);
+                tui::run_dashboard(dashboard)?;
+                return Ok(ExitCode::SUCCESS);
+            }
             let report = with_spinner("scanning", move || {
                 build_report(&root, top, include_tree, depth, &signatures)
             })?;
