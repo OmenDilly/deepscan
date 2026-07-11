@@ -96,7 +96,10 @@ fn build_level(path: PathBuf, cache: &HashMap<PathBuf, Vec<Entry>>) -> Level {
         // a selection the user toggled on a previous visit.
         let items = cached
             .iter()
-            .map(|entry| Entry { selected: false, ..entry.clone() })
+            .map(|entry| Entry {
+                selected: false,
+                ..entry.clone()
+            })
             .collect();
         return Level {
             path,
