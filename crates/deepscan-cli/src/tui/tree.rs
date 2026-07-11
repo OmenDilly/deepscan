@@ -91,10 +91,16 @@ fn sort_by_size(level: &mut Level) {
 
 /// List a directory instantly (files sized, directories queued for sizing).
 fn build_level(path: PathBuf, cache: &HashMap<PathBuf, Vec<Entry>>) -> Level {
-    if let Some(items) = cache.get(&path) {
+    if let Some(cached) = cache.get(&path) {
+        // Re-entering a cached level starts with a clean slate — don't resurrect
+        // a selection the user toggled on a previous visit.
+        let items = cached
+            .iter()
+            .map(|entry| Entry { selected: false, ..entry.clone() })
+            .collect();
         return Level {
             path,
-            items: items.clone(),
+            items,
             selected: 0,
             rx: None,
             pending: 0,
