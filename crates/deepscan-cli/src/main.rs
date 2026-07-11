@@ -2,7 +2,7 @@
 //!
 //!   deepscan scan [PATH]      reclaimable + leaks (+ --tree for where it went)
 //!   deepscan anomalies [PATH] size outliers vs sibling median (unknown leaks)
-//!   deepscan reclaim [--apply] guarded cleanup of regenerable caches
+//!   deepscan clean [--apply]    guarded cleanup of regenerable caches (alias: reclaim)
 
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -69,7 +69,8 @@ enum Commands {
         exit_code: bool,
     },
     /// Reclaim regenerable caches. Dry-run unless --apply is passed.
-    Reclaim {
+    #[command(alias = "reclaim")]
+    Clean {
         /// Actually delete (default is a dry run that deletes nothing).
         #[arg(long)]
         apply: bool,
@@ -82,6 +83,9 @@ enum Commands {
         /// Limit to targets whose name contains this text (repeatable).
         #[arg(long, value_name = "NAME")]
         only: Vec<String>,
+        /// Force the plain printed report even in a terminal.
+        #[arg(long)]
+        plain: bool,
     },
     /// Honest disk accounting: true capacity + local snapshots (the "System Data" gap).
     Space {
@@ -323,13 +327,14 @@ fn main() -> anyhow::Result<ExitCode> {
             json,
             exit_code,
         } => run_anomalies(path, json, exit_code),
-        Commands::Reclaim {
+        Commands::Clean {
             apply,
             yes,
             json,
             only,
+            plain,
         } => {
-            run_reclaim(apply, yes, json, only)?;
+            run_clean(apply, yes, json, only, plain)?;
             Ok(ExitCode::SUCCESS)
         }
         Commands::Space { path, json } => {
@@ -511,6 +516,45 @@ fn run_uninstall(app: String, apply: bool, yes: bool, json: bool) -> anyhow::Res
     };
 
     if !apply {
+        if interactive(json, false) {
+            let mut rows: Vec<tui::Row> = Vec::new();
+            if let Some(app) = &plan.app_path {
+                let mut r = tui::Row::new(
+                    plan.app_bytes,
+                    app.display().to_string(),
+                    app.clone(),
+                    tui::RowMeta::Confidence("app".into()),
+                );
+                r.selected = true;
+                rows.push(r);
+            }
+            for l in &plan.leftovers {
+                let tag = match l.confidence {
+                    Confidence::High => "high",
+                    Confidence::Medium => "med?",
+                };
+                let mut r = tui::Row::new(
+                    l.bytes,
+                    l.path.display().to_string(),
+                    l.path.clone(),
+                    tui::RowMeta::Confidence(tag.into()),
+                );
+                r.selected = true;
+                rows.push(r);
+            }
+            let outcome = tui::run_list(
+                rows,
+                tui::Sort::Size,
+                tui::ListConfig {
+                    title: format!("deepscan uninstall · {}", plan.app_name),
+                    home: home_dir(),
+                },
+            )?;
+            if outcome.freed_bytes > 0 {
+                println!("Moved {} to the Trash.", human(outcome.freed_bytes));
+            }
+            return Ok(ExitCode::SUCCESS);
+        }
         if json {
             println!("{}", serde_json::to_string_pretty(&plan)?);
         } else {
@@ -924,13 +968,54 @@ fn print_tree(node: &TreeNode, indent: usize, threshold: u64) {
     }
 }
 
-fn run_reclaim(apply: bool, yes: bool, json: bool, only: Vec<String>) -> anyhow::Result<()> {
+fn run_clean(
+    apply: bool,
+    yes: bool,
+    json: bool,
+    only: Vec<String>,
+    plain: bool,
+) -> anyhow::Result<()> {
     let plan = with_spinner("scanning reclaimable", build_reclaim_plan);
     let plan = if only.is_empty() {
         plan
     } else {
         filter_plan(plan, &only)
     };
+
+    if !apply && interactive(json, plain) {
+        let mut rows: Vec<tui::Row> = plan
+            .auto_targets
+            .iter()
+            .map(|t| {
+                tui::Row::new(
+                    t.bytes,
+                    t.name.clone(),
+                    t.path.clone(),
+                    tui::RowMeta::Tag("safe".into()),
+                )
+            })
+            .collect();
+        rows.extend(plan.manual_targets.iter().map(|t| {
+            tui::Row::new(
+                t.bytes,
+                t.name.clone(),
+                t.path.clone(),
+                tui::RowMeta::Tag("review".into()),
+            )
+        }));
+        let outcome = tui::run_list(
+            rows,
+            tui::Sort::Size,
+            tui::ListConfig {
+                title: "deepscan clean · caches".to_string(),
+                home: home_dir(),
+            },
+        )?;
+        if outcome.freed_bytes > 0 {
+            println!("Moved {} to the Trash.", human(outcome.freed_bytes));
+        }
+        return Ok(());
+    }
 
     if !apply {
         if json {
