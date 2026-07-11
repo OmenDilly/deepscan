@@ -107,6 +107,9 @@ enum Commands {
         /// Emit machine-readable JSON.
         #[arg(long)]
         json: bool,
+        /// Force the plain printed report even in a terminal.
+        #[arg(long)]
+        plain: bool,
     },
     /// Find exact duplicate files (size-bucket + BLAKE3, zero false positives).
     Dupes {
@@ -187,6 +190,12 @@ fn palette() -> Palette {
 
 fn home() -> PathBuf {
     home_dir().unwrap_or_else(|| PathBuf::from("/"))
+}
+
+/// Launch the interactive TUI only on a real terminal, and only when the user
+/// hasn't asked for machine/plain output.
+fn interactive(json: bool, plain: bool) -> bool {
+    !json && !plain && std::io::stdout().is_terminal()
 }
 
 /// Map the highest finding severity to a process exit code: 2 critical,
@@ -339,7 +348,8 @@ fn main() -> anyhow::Result<ExitCode> {
             min_mb,
             older,
             json,
-        } => run_large(path, top, min_mb, older, json),
+            plain,
+        } => run_large(path, top, min_mb, older, json, plain),
         Commands::Dupes {
             path,
             top,
@@ -365,6 +375,7 @@ fn run_large(
     min_mb: u64,
     older: Option<u64>,
     json: bool,
+    plain: bool,
 ) -> anyhow::Result<ExitCode> {
     let root = path.unwrap_or_else(home);
     let min = min_mb.saturating_mul(1024 * 1024);
@@ -373,6 +384,36 @@ fn run_large(
         files.retain(|f| f.modified_days.map(|d| d >= days).unwrap_or(false));
     }
     files.truncate(top);
+
+    if interactive(json, plain) && !files.is_empty() {
+        let rows: Vec<tui::Row> = files
+            .iter()
+            .map(|f| {
+                tui::Row::new(
+                    f.bytes,
+                    f.path.display().to_string(),
+                    f.path.clone(),
+                    tui::RowMeta::Age(f.modified_days),
+                )
+            })
+            .collect();
+        let title = match older {
+            Some(days) => format!("deepscan large · not modified in {days}+ days"),
+            None => "deepscan large".to_string(),
+        };
+        let outcome = tui::run_list(
+            rows,
+            tui::Sort::Size,
+            tui::ListConfig {
+                title,
+                home: home_dir(),
+            },
+        )?;
+        if outcome.freed_bytes > 0 {
+            println!("Moved {} to the Trash.", human(outcome.freed_bytes));
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
 
     if json {
         println!("{}", serde_json::to_string_pretty(&files)?);
