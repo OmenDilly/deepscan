@@ -326,7 +326,7 @@ dependencies = [
 
 [[package]]
 name = "deepscan-cli"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "clap",
@@ -338,7 +338,7 @@ dependencies = [
 
 [[package]]
 name = "deepscan-core"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "blake3",
