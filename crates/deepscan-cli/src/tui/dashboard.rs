@@ -8,8 +8,12 @@
 //! is a pure state machine (unit-tested without a terminal); the ratatui layer
 //! (Task 3) is a thin renderer.
 
-#![allow(dead_code, unused_imports)]
-// TODO(phase2): remove once Task 3 adds the render + run loop.
+// TODO(phase2): remove once Task 4 wires `run_dashboard`/`assemble_dashboard`
+// into `main.rs`'s interactive `scan` branch — this whole module is still
+// unreferenced from the bin crate's `main` until then, so `-D warnings`
+// dead-code lints fire on all of it despite everything being consumed
+// internally by Task 3's render/loop.
+#![allow(dead_code)]
 
 use std::io;
 use std::path::PathBuf;
@@ -187,10 +191,126 @@ impl Dashboard {
     }
 }
 
+/// Set up the terminal, run the dashboard, and always restore the terminal
+/// (mirrors tree.rs::run — restore happens even if the loop errors).
+pub fn run_dashboard(mut dashboard: Dashboard) -> anyhow::Result<()> {
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    let mut terminal = Terminal::new(CrosstermBackend::new(stdout))?;
+
+    let outcome = dashboard_loop(&mut terminal, &mut dashboard);
+
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    terminal.show_cursor()?;
+    outcome
+}
+
+fn dashboard_loop<B: Backend>(
+    terminal: &mut Terminal<B>,
+    dashboard: &mut Dashboard,
+) -> anyhow::Result<()> {
+    loop {
+        terminal.draw(|frame| draw(frame, dashboard))?;
+        if !event::poll(Duration::from_millis(120))? {
+            continue;
+        }
+        let Event::Key(key) = event::read()? else {
+            continue;
+        };
+        if key.kind != KeyEventKind::Press {
+            continue;
+        }
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Esc => break,
+            KeyCode::Up | KeyCode::Char('k') => dashboard.move_up(),
+            KeyCode::Down | KeyCode::Char('j') => dashboard.move_down(),
+            KeyCode::Right | KeyCode::Char('l') | KeyCode::Enter => {
+                // Clone out of the borrow before acting, so we can pass the
+                // terminal on for a nested explore.
+                let target = dashboard.current().map(|r| (r.kind, r.path.clone()));
+                if let Some((kind, path)) = target {
+                    match kind {
+                        RowKind::Dir => explore_at(terminal, path)?,
+                        RowKind::File => reveal_in_finder(&path),
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn draw(frame: &mut Frame, dashboard: &Dashboard) {
+    let chunks = Layout::vertical([
+        Constraint::Length(2), // path + disk accounting
+        Constraint::Min(1),    // sections
+        Constraint::Length(1), // key hints
+    ])
+    .split(frame.area());
+
+    let disk_line = match &dashboard.disk {
+        Some(disk) => format!(
+            " {} used of {}  ·  {} free  ·  {} snapshot(s)",
+            human(disk.used),
+            human(disk.total),
+            human(disk.free),
+            dashboard.snapshots
+        ),
+        None => format!(" {} snapshot(s)", dashboard.snapshots),
+    };
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(format!(" deepscan · {}", dashboard.root.display())).bold(),
+            Line::from(disk_line).dim(),
+        ]),
+        chunks[0],
+    );
+
+    // Build a flat item list (section headers + rows); map the nav cursor to the
+    // matching item index so the highlight lands on the right row.
+    let mut items: Vec<ListItem> = Vec::new();
+    let mut cursor_item = 0usize;
+    let mut nav_idx = 0usize;
+    for section in &dashboard.sections {
+        items.push(ListItem::new(
+            Line::from(format!(" {}", section.title)).bold(),
+        ));
+        for row in &section.rows {
+            if nav_idx == dashboard.cursor {
+                cursor_item = items.len();
+            }
+            let tag = row.tag.as_deref().unwrap_or("");
+            items.push(ListItem::new(Line::from(format!(
+                "   {:>10}  {:>6}  {}",
+                human(row.bytes),
+                tag,
+                row.label
+            ))));
+            nav_idx += 1;
+        }
+    }
+
+    let list = List::new(items)
+        .highlight_style(Style::new().add_modifier(Modifier::REVERSED))
+        .highlight_symbol("▶");
+    let mut state = UiListState::default();
+    if !dashboard.nav.is_empty() {
+        state.select(Some(cursor_item));
+    }
+    frame.render_stateful_widget(list, chunks[1], &mut state);
+
+    frame.render_widget(
+        Paragraph::new(" ↑↓ move   → / enter  explore folder · reveal file   q quit").dim(),
+        chunks[2],
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     fn anomaly(name: &str, bytes: u64, kind: AnomalyKind) -> Anomaly {
         Anomaly {
@@ -263,6 +383,5 @@ mod tests {
         d.move_down();
         assert_eq!(d.cursor, 1, "clamps at bottom");
         assert_eq!(d.current().map(|r| r.kind), Some(RowKind::Dir));
-        let _ = Path::new("/x");
     }
 }
