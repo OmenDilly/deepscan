@@ -12,7 +12,7 @@
 //! Navigation is a pure state machine ([`Explorer`]), unit-tested without a
 //! terminal; the ratatui layer is a thin renderer.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -25,12 +25,14 @@ use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style, Stylize};
 use ratatui::text::Line;
-use ratatui::widgets::{List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 use ratatui::{Frame, Terminal};
 use rayon::prelude::*;
+
+use super::action::{reveal_in_finder, trash_selected};
 
 const BAR_WIDTH: usize = 16;
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -42,6 +44,8 @@ struct Entry {
     is_dir: bool,
     /// Files know their size at load; directories are `None` until sized.
     bytes: Option<u64>,
+    /// Toggled by the user for a Trash action (current level only).
+    selected: bool,
 }
 
 struct Level {
@@ -119,6 +123,7 @@ fn build_level(path: PathBuf, cache: &HashMap<PathBuf, Vec<Entry>>) -> Level {
                 path: p,
                 is_dir,
                 bytes,
+                selected: false,
             });
         }
     }
@@ -238,6 +243,44 @@ impl Explorer {
             self.cache.insert(path, items);
         }
     }
+
+    /// Toggle the highlighted entry's selection (current level only).
+    fn toggle(&mut self) {
+        let level = self.current_mut();
+        if let Some(entry) = level.items.get_mut(level.selected) {
+            entry.selected = !entry.selected;
+        }
+    }
+
+    fn selected_count(&self) -> usize {
+        self.current().items.iter().filter(|e| e.selected).count()
+    }
+
+    fn selected_bytes(&self) -> u64 {
+        self.current()
+            .items
+            .iter()
+            .filter(|e| e.selected)
+            .filter_map(|e| e.bytes)
+            .sum()
+    }
+
+    /// Paths + sizes of the selected entries in the current level.
+    fn selected_targets(&self) -> Vec<(PathBuf, u64)> {
+        self.current()
+            .items
+            .iter()
+            .filter(|e| e.selected)
+            .map(|e| (e.path.clone(), e.bytes.unwrap_or(0)))
+            .collect()
+    }
+
+    /// Drop entries whose path was trashed; clamp the cursor.
+    fn remove_trashed(&mut self, trashed: &HashSet<PathBuf>) {
+        let level = self.current_mut();
+        level.items.retain(|e| !trashed.contains(&e.path));
+        level.selected = level.selected.min(level.items.len().saturating_sub(1));
+    }
 }
 
 /// Set up the terminal, run the explorer, and always restore the terminal.
@@ -276,20 +319,56 @@ fn event_loop<B: Backend>(
     mut explorer: Explorer,
 ) -> anyhow::Result<()> {
     let mut tick = 0usize;
+    let mut confirming = false;
+    let home = deepscan_core::home_dir();
     loop {
         explorer.drain_all();
-        terminal.draw(|frame| draw(frame, &explorer, tick))?;
+        terminal.draw(|frame| draw(frame, &explorer, tick, confirming))?;
 
         if event::poll(Duration::from_millis(80))? {
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {
-                    match key.code {
-                        KeyCode::Char('q') | KeyCode::Esc => break,
-                        KeyCode::Up | KeyCode::Char('k') => explorer.move_up(),
-                        KeyCode::Down | KeyCode::Char('j') => explorer.move_down(),
-                        KeyCode::Left | KeyCode::Char('h') => explorer.back(),
-                        KeyCode::Right | KeyCode::Char('l') | KeyCode::Enter => explorer.descend(),
-                        _ => {}
+                    if confirming {
+                        match key.code {
+                            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                                let targets = explorer.selected_targets();
+                                let outcome = trash_selected(&targets, home.as_deref());
+                                let failed: HashSet<PathBuf> =
+                                    outcome.failures.iter().map(|(p, _)| p.clone()).collect();
+                                let trashed: HashSet<PathBuf> = targets
+                                    .iter()
+                                    .map(|(p, _)| p.clone())
+                                    .filter(|p| !failed.contains(p))
+                                    .collect();
+                                explorer.remove_trashed(&trashed);
+                                confirming = false;
+                            }
+                            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                                confirming = false;
+                            }
+                            _ => {}
+                        }
+                    } else {
+                        match key.code {
+                            KeyCode::Char('q') | KeyCode::Esc => break,
+                            KeyCode::Up | KeyCode::Char('k') => explorer.move_up(),
+                            KeyCode::Down | KeyCode::Char('j') => explorer.move_down(),
+                            KeyCode::Left | KeyCode::Char('h') => explorer.back(),
+                            KeyCode::Right | KeyCode::Char('l') | KeyCode::Enter => {
+                                explorer.descend()
+                            }
+                            KeyCode::Char(' ') => explorer.toggle(),
+                            KeyCode::Char('f') => {
+                                let level = explorer.current();
+                                if let Some(entry) = level.items.get(level.selected) {
+                                    reveal_in_finder(&entry.path);
+                                }
+                            }
+                            KeyCode::Char('d') if explorer.selected_count() > 0 => {
+                                confirming = true;
+                            }
+                            _ => {}
+                        }
                     }
                 }
             }
@@ -299,7 +378,7 @@ fn event_loop<B: Backend>(
     Ok(())
 }
 
-fn draw(frame: &mut Frame, explorer: &Explorer, tick: usize) {
+fn draw(frame: &mut Frame, explorer: &Explorer, tick: usize, confirming: bool) {
     let chunks = Layout::vertical([
         Constraint::Length(1), // path + tree total
         Constraint::Length(1), // reconciliation against the whole volume
@@ -373,12 +452,19 @@ fn draw(frame: &mut Frame, explorer: &Explorer, tick: usize) {
                         as usize)
                         .min(BAR_WIDTH);
                     let bar = format!("{}{}", "█".repeat(filled), "·".repeat(BAR_WIDTH - filled));
-                    format!(" {bar}  {:>10}  {}{}", human(bytes), entry.name, suffix)
+                    let check = if entry.selected { "[x]" } else { "[ ]" };
+                    format!(
+                        " {check} {bar}  {:>10}  {}{}",
+                        human(bytes),
+                        entry.name,
+                        suffix
+                    )
                 }
                 None => {
                     let spinner = SPINNER[tick % SPINNER.len()];
+                    let check = if entry.selected { "[x]" } else { "[ ]" };
                     format!(
-                        " {:<width$}  {:>10}  {}{}",
+                        " {check} {:<width$}  {:>10}  {}{}",
                         format!("{spinner} sizing"),
                         "—",
                         entry.name,
@@ -400,10 +486,43 @@ fn draw(frame: &mut Frame, explorer: &Explorer, tick: usize) {
     }
     frame.render_stateful_widget(list, chunks[2], &mut state);
 
-    frame.render_widget(
-        Paragraph::new(" ↑↓ move   → enter   ← back   q quit   (explore / for whole disk)").dim(),
-        chunks[3],
+    let footer = if explorer.selected_count() > 0 {
+        format!(
+            " {} selected · {}   space toggle · d Trash · f reveal · ←→ nav · q quit",
+            explorer.selected_count(),
+            human(explorer.selected_bytes())
+        )
+    } else {
+        " ↑↓ move   → enter   ← back   space select   d Trash   f reveal   q quit".to_string()
+    };
+    frame.render_widget(Paragraph::new(footer).dim(), chunks[3]);
+
+    if confirming {
+        draw_confirm(frame, explorer);
+    }
+}
+
+fn draw_confirm(frame: &mut Frame, explorer: &Explorer) {
+    let area = centered(60, 7, frame.area());
+    frame.render_widget(Clear, area);
+    let text = format!(
+        "Move {} item(s) ({}) to the Trash?\n\n[y] confirm    [n] cancel",
+        explorer.selected_count(),
+        human(explorer.selected_bytes())
     );
+    let block = Block::default().borders(Borders::ALL).title(" confirm ");
+    frame.render_widget(Paragraph::new(text).block(block).bold(), area);
+}
+
+fn centered(w: u16, h: u16, area: Rect) -> Rect {
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
+    let y = area.y + (area.height.saturating_sub(h)) / 2;
+    Rect {
+        x,
+        y,
+        width: w.min(area.width),
+        height: h.min(area.height),
+    }
 }
 
 #[cfg(test)]
@@ -416,6 +535,7 @@ mod tests {
             path: PathBuf::from("/root").join(name),
             is_dir: true,
             bytes,
+            selected: false,
         }
     }
 
@@ -465,5 +585,32 @@ mod tests {
         sort_by_size(&mut lvl);
         assert_eq!(lvl.items[0].name, "b", "largest first");
         assert_eq!(lvl.selected, 1, "cursor follows 'a' to its new row");
+    }
+
+    #[test]
+    fn toggle_and_selected_targets() {
+        let mut explorer = explorer(vec![dir_entry("a", Some(30)), dir_entry("b", Some(20))]);
+        explorer.toggle(); // select "a" (cursor 0)
+        assert_eq!(explorer.selected_count(), 1);
+        assert_eq!(explorer.selected_bytes(), 30);
+        let targets = explorer.selected_targets();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].1, 30);
+        explorer.toggle(); // deselect
+        assert_eq!(explorer.selected_count(), 0);
+    }
+
+    #[test]
+    fn remove_trashed_drops_entries_and_clamps() {
+        let mut explorer = explorer(vec![
+            dir_entry("a", Some(30)),
+            dir_entry("b", Some(20)),
+            dir_entry("c", Some(10)),
+        ]);
+        explorer.current_mut().selected = 2; // cursor on "c"
+        let trashed: HashSet<PathBuf> = [PathBuf::from("/root/c")].into_iter().collect();
+        explorer.remove_trashed(&trashed);
+        assert_eq!(explorer.current().items.len(), 2);
+        assert_eq!(explorer.current().selected, 1, "cursor clamps to last row");
     }
 }
