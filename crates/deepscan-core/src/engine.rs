@@ -213,6 +213,13 @@ pub fn is_safe_to_delete(path: &Path, home: Option<&Path>) -> bool {
 /// `/Applications/Foo.app` (3 components) that the automated guard rejects,
 /// while still refusing the catastrophic — root, top-level dirs, the home dir
 /// itself, relative paths, and anything with `..`.
+///
+/// SAFETY CONTRACT: this is a backstop, not the primary gate — every caller
+/// either deletes only human-confirmed selections or plan-vetted targets (a
+/// resolved `.app` bundle, `$HOME`/`~Library` entries, or individual files),
+/// never a bare top-level directory. A 3-component *directory* that isn't an
+/// app bundle (e.g. `/System/Library`, a sibling `/Users/<other>`) would pass
+/// this check, so any future caller must preserve that invariant.
 pub fn is_safe_to_trash(path: &Path, home: Option<&Path>) -> bool {
     if !path.is_absolute() {
         return false;
