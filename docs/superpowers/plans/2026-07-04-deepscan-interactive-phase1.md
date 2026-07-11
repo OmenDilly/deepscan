@@ -240,6 +240,9 @@ Create `crates/deepscan-cli/src/tui/widget.rs`:
 //! (with dupe "protect the last copy" safety), and sorting. Unit-tested with no
 //! terminal; `render.rs` draws it and `mod.rs` runs the event loop.
 
+// TODO(phase1): remove once the command adapters consume this widget (Task 6).
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -288,7 +291,7 @@ pub struct ListState {
 impl ListState {
     pub fn new(rows: Vec<Row>, sort: Sort) -> Self {
         let mut state = ListState { rows, cursor: 0, sort };
-        state.apply_sort();
+        state.sort_rows();
         state
     }
 
@@ -348,14 +351,20 @@ impl ListState {
 
     pub fn set_sort(&mut self, sort: Sort) {
         self.sort = sort;
-        self.apply_sort();
+        let anchor = self.rows.get(self.cursor).map(|r| r.path.clone());
+        self.sort_rows();
+        self.cursor = anchor
+            .and_then(|p| self.rows.iter().position(|r| r.path == p))
+            .unwrap_or(0)
+            .min(self.rows.len().saturating_sub(1));
     }
 
-    fn apply_sort(&mut self) {
-        let anchor = self.rows.get(self.cursor).map(|r| r.path.clone());
+    /// Sort rows in place by the active key (no cursor tracking). `new` leaves
+    /// the cursor at the top of the sorted list; `set_sort` re-anchors it.
+    fn sort_rows(&mut self) {
         match self.sort {
             Sort::Size => self.rows.sort_by_key(|r| std::cmp::Reverse(r.bytes)),
-            Sort::Name => self.rows.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase())),
+            Sort::Name => self.rows.sort_by_key(|r| r.label.to_lowercase()),
             Sort::Age => self.rows.sort_by_key(|r| {
                 let days = match r.meta {
                     RowMeta::Age(d) => d.unwrap_or(0),
@@ -364,10 +373,6 @@ impl ListState {
                 std::cmp::Reverse(days)
             }),
         }
-        self.cursor = anchor
-            .and_then(|p| self.rows.iter().position(|r| r.path == p))
-            .unwrap_or(0)
-            .min(self.rows.len().saturating_sub(1));
     }
 
     pub fn selected(&self) -> impl Iterator<Item = &Row> {
