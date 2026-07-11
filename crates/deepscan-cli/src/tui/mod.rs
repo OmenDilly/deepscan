@@ -2,11 +2,16 @@
 //! `action`, and `render` back the shared sized-list.
 
 mod action;
+mod dashboard;
 mod render;
 mod tree;
 mod widget;
 
 pub use action::TrashOutcome;
+// TODO(phase2): consumed by Task 3's `run_dashboard` entry point; unused in
+// this bin crate until then.
+#[allow(unused_imports)]
+pub use dashboard::{assemble_dashboard, Dashboard};
 pub use tree::run;
 pub use widget::{Row, RowMeta, Sort};
 
