@@ -128,6 +128,9 @@ enum Commands {
         /// Emit machine-readable JSON.
         #[arg(long)]
         json: bool,
+        /// Force the plain printed report even in a terminal.
+        #[arg(long)]
+        plain: bool,
     },
     /// Find an app + its leftover files; dry-run, or --apply to Trash them.
     Uninstall {
@@ -360,7 +363,8 @@ fn main() -> anyhow::Result<ExitCode> {
             top,
             min_mb,
             json,
-        } => run_dupes(path, top, min_mb, json),
+            plain,
+        } => run_dupes(path, top, min_mb, json, plain),
         Commands::Uninstall {
             app,
             apply,
@@ -461,10 +465,46 @@ fn run_dupes(
     top: usize,
     min_mb: u64,
     json: bool,
+    plain: bool,
 ) -> anyhow::Result<ExitCode> {
     let root = path.unwrap_or_else(home);
     let min = min_mb.saturating_mul(1024 * 1024);
     let groups = with_spinner("finding duplicates", move || find_duplicates(&root, min));
+
+    if interactive(json, plain) && !groups.is_empty() {
+        let mut rows: Vec<tui::Row> = Vec::new();
+        for (gid, group) in groups.iter().take(top).enumerate() {
+            for path in &group.paths {
+                rows.push(tui::Row {
+                    bytes: group.bytes,
+                    label: path.display().to_string(),
+                    path: path.clone(),
+                    selected: false,
+                    meta: tui::RowMeta::Tag(format!("×{}", group.paths.len())),
+                    group: Some(gid),
+                });
+            }
+        }
+        let title = format!(
+            "deepscan dupes · {} reclaimable",
+            human(groups.iter().map(|g| g.wasted).sum())
+        );
+        let outcome = tui::run_list(
+            rows,
+            tui::Sort::Size,
+            tui::ListConfig {
+                title,
+                home: home_dir(),
+            },
+        )?;
+        if outcome.freed_bytes > 0 {
+            println!(
+                "Moved {} of duplicates to the Trash.",
+                human(outcome.freed_bytes)
+            );
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
 
     if json {
         let shown: Vec<&DuplicateGroup> = groups.iter().take(top).collect();

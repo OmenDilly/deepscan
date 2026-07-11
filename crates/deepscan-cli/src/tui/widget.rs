@@ -2,14 +2,14 @@
 //! (with dupe "protect the last copy" safety), and sorting. Unit-tested with no
 //! terminal; `render.rs` draws it and `mod.rs` runs the event loop.
 
-// TODO(phase1): remove once the command adapters consume this widget (Task 6).
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RowMeta {
+    /// A row with no meta column — part of the widget API for future consumers
+    /// (explore/scan rows); currently exercised only by tests.
+    #[allow(dead_code)]
     None,
     /// Days since modified (for `large`).
     Age(Option<u64>),

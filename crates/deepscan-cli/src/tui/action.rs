@@ -2,9 +2,6 @@
 //! Trash (guarded by `is_safe_to_delete`), and reveal a path in Finder. The
 //! Trash call is injectable so the guard is unit-tested without touching Trash.
 
-// TODO(phase1): remove once run_list consumes this module (Task 6).
-#![allow(dead_code)]
-
 use std::path::{Path, PathBuf};
 use std::process::Command;
 

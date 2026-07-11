@@ -1,8 +1,5 @@
 //! Interactive terminal views. `tree` is the explore browser; `widget`,
-//! `action`, and `render` (added in later tasks) back the shared sized-list.
-
-// TODO(phase1): remove once run_list consumes this module (Task 6).
-#![allow(dead_code, unused_imports)]
+//! `action`, and `render` back the shared sized-list.
 
 mod action;
 mod render;
