@@ -346,6 +346,7 @@ dependencies = [
  "libc",
  "rayon",
  "serde",
+ "serde_json",
  "shellexpand",
  "toml",
  "trash",

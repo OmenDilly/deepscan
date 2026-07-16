@@ -15,6 +15,7 @@ shellexpand = "3"
 anyhow = "1"
 blake3 = "1"
 trash = "5"
+serde_json = "1"
 
 # macOS fast path: getattrlistbulk(2) — one syscall per directory.
 [target.'cfg(target_os = "macos")'.dependencies]

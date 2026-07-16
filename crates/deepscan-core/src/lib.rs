@@ -6,6 +6,7 @@
 //! path once.
 
 pub mod anomaly;
+pub mod baseline;
 pub mod catalog;
 pub mod deletion;
 pub mod engine;
@@ -17,6 +18,10 @@ pub mod space;
 pub mod uninstall;
 
 pub use anomaly::{analyze_container, default_zones, detect_anomalies, Anomaly, AnomalyKind, Zone};
+pub use baseline::{
+    compute_growth, load_history, record_and_compare, save_history, snapshot_now, Growth,
+    GrowthReport, Snapshot,
+};
 pub use catalog::{default_catalog, evaluate_catalog, CatalogEntry};
 pub use deletion::move_to_trash;
 pub use engine::{

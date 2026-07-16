@@ -171,7 +171,7 @@ pub fn analyze_container(zone: &str, container: &Path, floor: u64) -> Vec<Anomal
 /// Cache (regenerable, safe to clear) vs real app data, decided from the path:
 /// a known cache/temp location, or a `safe_auto` cache entry in the reclaimable
 /// catalog, is a cache; everything else is app data worth reviewing.
-fn classify(path: &Path) -> AnomalyKind {
+pub(crate) fn classify(path: &Path) -> AnomalyKind {
     if is_reclaimable_cache(path) {
         AnomalyKind::Cache
     } else {
@@ -201,7 +201,7 @@ fn is_reclaimable_cache(path: &Path) -> bool {
     })
 }
 
-fn sized_children(container: &Path) -> Vec<(PathBuf, u64)> {
+pub(crate) fn sized_children(container: &Path) -> Vec<(PathBuf, u64)> {
     let read_dir = match fs::read_dir(container) {
         Ok(read_dir) => read_dir,
         Err(_) => return Vec::new(),
