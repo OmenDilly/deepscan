@@ -31,7 +31,7 @@ For each folder in the current snapshot, compared to the most recent prior snaps
 
 ## Surface
 
-- `deepscan growth [--json] [--plain]` — a printed report (TTY-colored via the existing palette; plain when piped). Not a TUI (growth is investigative — you look, you don't select→Trash), so no interactive mode for now.
+- `deepscan growth [--json]` — a printed report (TTY-colored via the existing palette; auto-plain when piped). Not a TUI (growth is investigative — you look, you don't select→Trash), so no interactive mode and no `--plain` flag (nothing to force-plain past).
 - Standalone: does **not** touch `scan`'s fast default path or any other command; recording happens only when `growth` runs.
 
 ## Scope / non-goals
