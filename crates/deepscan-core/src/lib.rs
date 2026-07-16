@@ -7,6 +7,7 @@
 
 pub mod anomaly;
 pub mod baseline;
+pub mod baselines;
 pub mod catalog;
 pub mod deletion;
 pub mod engine;
@@ -21,6 +22,10 @@ pub use anomaly::{analyze_container, default_zones, detect_anomalies, Anomaly, A
 pub use baseline::{
     compute_growth, load_history, record_and_compare, save_history, snapshot_now, Growth,
     GrowthReport, Snapshot,
+};
+pub use baselines::{
+    baseline_ratio, default_baselines, is_above_typical, load_baselines, lookup_baseline,
+    parse_baselines, Baseline,
 };
 pub use catalog::{default_catalog, evaluate_catalog, CatalogEntry};
 pub use deletion::move_to_trash;
