@@ -12,9 +12,9 @@ use clap::{Parser, Subcommand};
 use deepscan_core::{
     analyze_container, build_reclaim_plan, build_report, default_signatures, default_zones,
     detect_anomalies, execute_reclaim, execute_uninstall, find_duplicates, find_large_files,
-    home_dir, human, load_signatures, plan_uninstall, progress, reset_progress, space_report,
-    AnomalyKind, Confidence, DuplicateGroup, ReclaimPlan, ScanReport, Severity, SpaceReport,
-    TreeNode, UninstallPlan,
+    home_dir, human, load_signatures, plan_uninstall, progress, record_and_compare, reset_progress,
+    space_report, AnomalyKind, Confidence, DuplicateGroup, ReclaimPlan, ScanReport, Severity,
+    SpaceReport, TreeNode, UninstallPlan,
 };
 
 mod tui;
@@ -153,6 +153,13 @@ enum Commands {
     Explore {
         /// Root to explore (default: your home directory).
         path: Option<PathBuf>,
+    },
+    /// Record a size snapshot and report folders growing abnormally fast
+    /// (temporal baseline; history in ~/.deepscan/history.json).
+    Growth {
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -408,6 +415,7 @@ fn main() -> anyhow::Result<ExitCode> {
             tui::run(path.unwrap_or_else(home))?;
             Ok(ExitCode::SUCCESS)
         }
+        Commands::Growth { json } => run_growth(json),
     }
 }
 
@@ -1240,5 +1248,82 @@ fn render_plan(plan: &ReclaimPlan, with_hint: bool) {
             "\n{dim}Run{reset} deepscan reclaim --apply {dim}to free the {} of safe targets.{reset}",
             human(plan.auto_bytes)
         );
+    }
+}
+
+fn run_growth(json: bool) -> anyhow::Result<ExitCode> {
+    let report = with_spinner("scanning zones", record_and_compare);
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(ExitCode::SUCCESS);
+    }
+    render_growth(&report);
+    Ok(ExitCode::SUCCESS)
+}
+
+fn render_growth(report: &deepscan_core::GrowthReport) {
+    let Palette {
+        bold,
+        dim,
+        yellow,
+        cyan,
+        reset,
+        ..
+    } = palette();
+
+    if report.baseline_only {
+        println!(
+            "{bold}deepscan growth{reset} {dim}· baseline recorded — run again later to see what grew{reset}"
+        );
+        return;
+    }
+
+    let since = human_duration(
+        report
+            .now
+            .saturating_sub(report.previous_at.unwrap_or(report.now)),
+    );
+    println!("{bold}deepscan growth{reset} {dim}· since {since} ago{reset}");
+    if report.entries.is_empty() {
+        println!("  {dim}nothing grew notably since the last snapshot{reset}");
+        return;
+    }
+    for g in &report.entries {
+        let (tag, color) = match g.kind {
+            AnomalyKind::AppData => ("app data", yellow),
+            AnomalyKind::Cache => ("cache", dim),
+        };
+        let change = if g.is_new {
+            format!("NEW {}", human(g.current))
+        } else {
+            let pct = g.pct.map(|p| format!(" (+{p:.0}%)")).unwrap_or_default();
+            format!("+{}{}", human(g.delta), pct)
+        };
+        let rate = if g.days >= 1.0 && !g.is_new {
+            format!(
+                " {dim}· {}/day{reset}",
+                human((g.delta as f64 / g.days) as u64)
+            )
+        } else {
+            String::new()
+        };
+        println!(
+            "  {color}{:>18}{reset}  {cyan}{}{reset} {dim}[{tag}]{reset}{}",
+            change, g.name, rate
+        );
+        println!("      {dim}{}{reset}", g.path.display());
+    }
+}
+
+/// Coarse "3d" / "5h" / "12m" duration for the "since … ago" header.
+fn human_duration(secs: u64) -> String {
+    if secs >= 86_400 {
+        format!("{}d", secs / 86_400)
+    } else if secs >= 3_600 {
+        format!("{}h", secs / 3_600)
+    } else if secs >= 60 {
+        format!("{}m", secs / 60)
+    } else {
+        format!("{secs}s")
     }
 }
