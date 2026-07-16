@@ -126,6 +126,21 @@ pub fn detect_anomalies(zones: &[Zone]) -> Vec<Anomaly> {
     anomalies
 }
 
+/// Every child folder across all zones, with its zone name — the full
+/// population. This is what a *typical* size must be sampled from;
+/// [`detect_anomalies`] deliberately returns only the outlier subset.
+pub fn zone_children() -> Vec<(&'static str, PathBuf, u64)> {
+    let mut out = Vec::new();
+    for zone in default_zones() {
+        for container in expand_paths(zone.path) {
+            for (path, bytes) in sized_children(&container) {
+                out.push((zone.name, path, bytes));
+            }
+        }
+    }
+    out
+}
+
 /// Flag size outliers among the immediate child directories of `container`.
 pub fn analyze_container(zone: &str, container: &Path, floor: u64) -> Vec<Anomaly> {
     let children = sized_children(container);

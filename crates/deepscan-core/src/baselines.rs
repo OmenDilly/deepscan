@@ -142,5 +142,14 @@ observations = 4
         let shipped = parse_baselines(include_str!("../../../baselines.toml"))
             .expect("shipped baselines.toml must parse");
         assert!(shipped.iter().all(|b| b.typical_mb > 0));
+
+        let zones: Vec<&str> = crate::anomaly::default_zones()
+            .iter()
+            .map(|z| z.name)
+            .collect();
+        assert!(
+            shipped.iter().all(|b| zones.contains(&b.zone.as_str())),
+            "every baseline zone must match a default_zones() name"
+        );
     }
 }

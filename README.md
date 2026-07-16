@@ -58,6 +58,8 @@ deepscan reclaim --apply      # free regenerable caches (asks first)
 |---|---|
 | `deepscan scan [PATH]` | Reclaimable caches + leak signatures (fast). `--tree` / `--depth N` adds the full size tree; `--json` for machine output. |
 | `deepscan anomalies [PATH]` | Unknown-leak detection — directories that are size outliers vs their siblings' learned median. |
+| `deepscan growth` | Temporal self-baseline — flags folders growing abnormally fast vs your own history (`~/.deepscan/history.json`). |
+| `deepscan baseline` | Compare your folder sizes against curated per-app typical sizes (`baselines.toml`); `--suggest` prints rows measured here to contribute via PR. |
 | `deepscan reclaim` | Guarded cleanup of regenerable caches. Dry-run by default; `--apply` (with `--yes`) to delete. |
 | `deepscan space [PATH]` | Honest disk accounting — true capacity/used/free + the local APFS snapshots behind "System Data" (with the reclaim command). |
 | `deepscan large [PATH]` | Largest files, optionally only old ones (`--older N`, `--min-mb`). |
@@ -99,6 +101,17 @@ The leak rules live in [`signatures.toml`](signatures.toml). Add a
 `[[signature]]` block to teach deepscan a new leak, or pass your own set with
 `--signatures my-rules.toml`. PRs that add real-world leaks are the point.
 
+## Baselines are data too
+
+`deepscan anomalies` tells you a folder is *big*; [`baselines.toml`](baselines.toml)
+tells you whether that's *normal for that app*. Curated per-app typical sizes,
+contributed by PR — the cross-machine baseline done over git instead of
+telemetry, so deepscan never phones home and never uploads a map of your
+filesystem. Run `deepscan baseline --suggest` to print `[[baseline]]` rows
+measured on your own machine (outliers are excluded automatically — a
+baseline has to come from a *typical* folder), then open a PR. `deepscan
+baseline` compares your sizes against what's already curated.
+
 ## Architecture
 
 - `deepscan-core` — the engine: parallel sizing, the catalog, the signature
@@ -123,8 +136,9 @@ the portable backend (handy for A/B benchmarking, or as a safety valve).
 - [x] `--json` output and a guarded `reclaim --apply` mode.
 - [x] Baseline learning (v1) — flag size outliers vs the *learned sibling
       median*, catching unknown leaks with no signature.
-- [ ] Community baselines — compare against a cross-machine median per
-      directory, not just local siblings.
+- [x] Community baselines — compare against a cross-machine median per
+      directory, not just local siblings. Done over git (`baselines.toml`,
+      PR-curated), not telemetry.
 - [ ] Swift menu-bar app over the shared core.
 
 ## Safety

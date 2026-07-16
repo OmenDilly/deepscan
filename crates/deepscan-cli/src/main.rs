@@ -14,8 +14,8 @@ use deepscan_core::{
     default_signatures, default_zones, detect_anomalies, execute_reclaim, execute_uninstall,
     find_duplicates, find_large_files, home_dir, human, is_above_typical, load_signatures,
     lookup_baseline, plan_uninstall, progress, record_and_compare, reset_progress, space_report,
-    AnomalyKind, Confidence, DuplicateGroup, ReclaimPlan, ScanReport, Severity, SpaceReport,
-    TreeNode, UninstallPlan,
+    zone_children, AnomalyKind, Confidence, DuplicateGroup, ReclaimPlan, ScanReport, Severity,
+    SpaceReport, TreeNode, UninstallPlan,
 };
 
 mod tui;
@@ -915,10 +915,13 @@ fn run_anomalies(path: Option<PathBuf>, json: bool, exit_code: bool) -> anyhow::
     Ok(code)
 }
 
+/// Render a string as a TOML basic string (folder names can contain quotes).
+fn toml_string(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
 fn run_baseline(suggest: bool, json: bool) -> anyhow::Result<ExitCode> {
     let baselines = default_baselines();
-    let anomalies = with_spinner("measuring zones", || detect_anomalies(&default_zones()));
-
     let Palette {
         bold,
         dim,
@@ -929,24 +932,80 @@ fn run_baseline(suggest: bool, json: bool) -> anyhow::Result<ExitCode> {
         ..
     } = palette();
 
-    if suggest {
-        let missing: Vec<_> = anomalies
-            .iter()
-            .filter(|a| lookup_baseline(&baselines, &a.name, &a.zone).is_none())
-            .collect();
-        println!(
-            "{dim}# measured on this machine — review, then PR these into baselines.toml{reset}"
-        );
-        if missing.is_empty() {
-            println!("{dim}# every notable folder here already has a baseline{reset}");
+    // Nothing to compare against — say so without paying for a zone scan.
+    // (--suggest still needs the measurement.)
+    if !suggest && baselines.is_empty() {
+        if json {
+            println!("[]");
             return Ok(ExitCode::SUCCESS);
         }
-        for a in missing {
+        println!("{bold}deepscan baseline{reset} {dim}· no curated baselines yet{reset}");
+        println!(
+            "  {dim}baselines.toml is empty — run `deepscan baseline --suggest` and open a PR to seed it.{reset}"
+        );
+        println!(
+            "  {dim}(baselines are curated over git, never telemetry — deepscan does not phone home){reset}"
+        );
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    let anomalies = with_spinner("measuring zones", || detect_anomalies(&default_zones()));
+
+    if suggest {
+        const SUGGEST_FLOOR: u64 = 200 * 1024 * 1024;
+        // A baseline must come from *typical* folders, so sample the full
+        // population and drop the ones this machine flags as outliers —
+        // contributing your outlier as "typical" would poison the dataset and
+        // suppress the very signal the baseline exists to raise.
+        let outliers: std::collections::HashSet<PathBuf> =
+            anomalies.iter().map(|a| a.path.clone()).collect();
+        let population = with_spinner("measuring all zone folders", zone_children);
+
+        let mut rows = Vec::new();
+        let mut omitted = 0usize;
+        for (zone, path, bytes) in population {
+            if bytes < SUGGEST_FLOOR {
+                continue;
+            }
+            let name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(n) => n.to_string(),
+                None => continue,
+            };
+            if lookup_baseline(&baselines, &name, zone).is_some() {
+                continue;
+            }
+            if outliers.contains(&path) {
+                omitted += 1;
+                continue;
+            }
+            rows.push((name, zone, bytes));
+        }
+        rows.sort_by_key(|a| a.0.to_lowercase());
+
+        println!("{dim}# deepscan baseline --suggest — measured on this machine.{reset}");
+        println!(
+            "{dim}# These are folders whose size looks TYPICAL here. Review, then PR into{reset}"
+        );
+        println!(
+            "{dim}# baselines.toml. If an entry already exists, average yours in and bump{reset}"
+        );
+        println!("{dim}# observations instead of adding a duplicate.{reset}");
+        if omitted > 0 {
+            println!(
+                "{dim}# ({omitted} folder(s) omitted: flagged as outliers on this machine, so they{reset}"
+            );
+            println!("{dim}#  are not typical — that is exactly what a baseline is for.){reset}");
+        }
+        if rows.is_empty() {
+            println!("{dim}# nothing to suggest{reset}");
+            return Ok(ExitCode::SUCCESS);
+        }
+        for (name, zone, bytes) in rows {
             println!();
             println!("[[baseline]]");
-            println!("name = \"{}\"", a.name);
-            println!("zone = \"{}\"", a.zone);
-            println!("typical_mb = {}", a.bytes / (1024 * 1024));
+            println!("name = {}", toml_string(&name));
+            println!("zone = {}", toml_string(zone));
+            println!("typical_mb = {}", bytes / (1024 * 1024));
             println!("observations = 1");
         }
         return Ok(ExitCode::SUCCESS);
@@ -980,15 +1039,6 @@ fn run_baseline(suggest: bool, json: bool) -> anyhow::Result<ExitCode> {
         "{bold}deepscan baseline{reset} {dim}· your sizes vs curated typical ({} baseline(s)){reset}",
         baselines.len()
     );
-    if baselines.is_empty() {
-        println!(
-            "  {dim}baselines.toml is empty — run `deepscan baseline --suggest` and open a PR to seed it.{reset}"
-        );
-        println!(
-            "  {dim}(baselines are curated over git, never telemetry — deepscan does not phone home){reset}"
-        );
-        return Ok(ExitCode::SUCCESS);
-    }
     if matched.is_empty() {
         println!("  {dim}none of your notable folders have a baseline yet{reset}");
         return Ok(ExitCode::SUCCESS);

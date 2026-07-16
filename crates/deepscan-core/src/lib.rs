@@ -18,7 +18,9 @@ pub mod signatures;
 pub mod space;
 pub mod uninstall;
 
-pub use anomaly::{analyze_container, default_zones, detect_anomalies, Anomaly, AnomalyKind, Zone};
+pub use anomaly::{
+    analyze_container, default_zones, detect_anomalies, zone_children, Anomaly, AnomalyKind, Zone,
+};
 pub use baselines::{
     baseline_ratio, default_baselines, is_above_typical, load_baselines, lookup_baseline,
     parse_baselines, Baseline,

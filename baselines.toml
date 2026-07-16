@@ -23,6 +23,13 @@
 #   typical_mb    required  typical observed size, in MB
 #   observations  optional  machines this came from (default 1)
 #   note          optional  one line — what lives in it / why it grows
+#
+# Maintainer acceptance rule (the PR review IS the gate):
+#   • Reject any row whose folder `deepscan anomalies` flags on the contributor's
+#     machine — an outlier is not a typical size.
+#   • Prefer entries with observations >= 3 before trusting them to flag others.
+#   • Merging a new machine into an existing entry: average typical_mb in and
+#     bump observations; never overwrite.
 
 # No entries yet. This file ships empty on purpose: inventing plausible-looking
 # "typical" sizes would be exactly the dishonesty deepscan exists to avoid.
