@@ -1,0 +1,29 @@
+# deepscan baselines — typical size per app, so "big" can be judged against
+# "normal for THIS app" instead of just "big".
+#
+# Baselines are DATA and community-curated: add a [[baseline]] block via PR.
+# This is the cross-machine baseline done over git instead of telemetry —
+# deepscan never phones home.
+#
+# Numbers must be REAL observations, never guesses. Run
+#   deepscan baseline --suggest
+# to print rows measured from your own machine, then open a PR with them.
+#
+# A baseline is a *typical* size; deepscan flags a folder several times above
+# it. A baseline is only as good as its sample — `observations` records how
+# many machines contributed, so a 1-machine entry is treated as the weak
+# evidence it is. When you add to an existing entry, average it in and bump
+# `observations`.
+#
+# Fields:
+#   name          required  folder name to match (case-insensitive)
+#   zone          required  one of: Application Support | User caches |
+#                           App containers | Group containers |
+#                           Per-user temp | Per-user temp caches
+#   typical_mb    required  typical observed size, in MB
+#   observations  optional  machines this came from (default 1)
+#   note          optional  one line — what lives in it / why it grows
+
+# No entries yet. This file ships empty on purpose: inventing plausible-looking
+# "typical" sizes would be exactly the dishonesty deepscan exists to avoid.
+# Seed it with real measurements — `deepscan baseline --suggest` prints yours.
