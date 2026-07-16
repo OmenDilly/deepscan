@@ -963,12 +963,17 @@ fn run_baseline(suggest: bool, json: bool) -> anyhow::Result<ExitCode> {
 
         let apps = with_spinner("reading installed apps", installed_app_keys);
         // A folder only deserves a baseline if real software backs it. Match the
-        // app's name or bundle id; allow a prefix so "Google" matches
-        // "Google Chrome", but require 4+ chars so short names can't over-match.
+        // app's name or bundle id, in either direction: "Google" matches the app
+        // "Google Chrome", and the folder "Google Chrome Helper" matches it too.
+        // Whichever side is the prefix must be 4+ chars, so a short name like
+        // "Arc" can't swallow "Archive Utility".
         let backed_by_app = |name: &str| {
             let lower = name.to_lowercase();
             apps.contains(&lower)
-                || (lower.len() >= 4 && apps.iter().any(|k| k.starts_with(&lower)))
+                || apps.iter().any(|key| {
+                    (lower.len() >= 4 && key.starts_with(&lower))
+                        || (key.len() >= 4 && lower.starts_with(key.as_str()))
+                })
         };
 
         let mut rows = Vec::new();
