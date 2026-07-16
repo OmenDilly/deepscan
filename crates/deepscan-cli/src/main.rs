@@ -10,11 +10,12 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use deepscan_core::{
-    analyze_container, build_reclaim_plan, build_report, default_signatures, default_zones,
-    detect_anomalies, execute_reclaim, execute_uninstall, find_duplicates, find_large_files,
-    home_dir, human, load_signatures, plan_uninstall, progress, record_and_compare, reset_progress,
-    space_report, AnomalyKind, Confidence, DuplicateGroup, ReclaimPlan, ScanReport, Severity,
-    SpaceReport, TreeNode, UninstallPlan,
+    analyze_container, baseline_ratio, build_reclaim_plan, build_report, default_baselines,
+    default_signatures, default_zones, detect_anomalies, execute_reclaim, execute_uninstall,
+    find_duplicates, find_large_files, home_dir, human, is_above_typical, load_signatures,
+    lookup_baseline, plan_uninstall, progress, record_and_compare, reset_progress, space_report,
+    AnomalyKind, Confidence, DuplicateGroup, ReclaimPlan, ScanReport, Severity, SpaceReport,
+    TreeNode, UninstallPlan,
 };
 
 mod tui;
@@ -159,6 +160,17 @@ enum Commands {
     Growth {
         /// Emit machine-readable JSON.
         #[arg(long)]
+        json: bool,
+    },
+    /// Compare your folder sizes against the curated per-app baselines, or
+    /// print [[baseline]] rows measured here to contribute (baselines.toml).
+    Baseline {
+        /// Print [[baseline]] TOML rows for folders that have no baseline yet,
+        /// measured on this machine — review, then PR them into baselines.toml.
+        #[arg(long)]
+        suggest: bool,
+        /// Emit machine-readable JSON (the comparison view).
+        #[arg(long, conflicts_with = "suggest")]
         json: bool,
     },
 }
@@ -416,6 +428,7 @@ fn main() -> anyhow::Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         Commands::Growth { json } => run_growth(json),
+        Commands::Baseline { suggest, json } => run_baseline(suggest, json),
     }
 }
 
@@ -791,6 +804,30 @@ fn render_space(root: &Path, report: &SpaceReport) {
     println!("  {dim}honest limit. Run `deepscan scan --tree` to see the files you CAN account for.{reset}");
 }
 
+/// " · typical ~800 MB · 25.6× above typical" when a curated baseline exists
+/// for this folder; empty string otherwise (so output is unchanged until
+/// baselines.toml has entries).
+fn baseline_note(
+    baselines: &[deepscan_core::Baseline],
+    name: &str,
+    zone: &str,
+    bytes: u64,
+) -> String {
+    let Palette {
+        dim, red, reset, ..
+    } = palette();
+    let Some(b) = lookup_baseline(baselines, name, zone) else {
+        return String::new();
+    };
+    let typical = human(b.typical_mb.saturating_mul(1024 * 1024));
+    match baseline_ratio(bytes, b) {
+        Some(r) if is_above_typical(bytes, b) => {
+            format!(" {dim}· typical ~{typical}{reset} {red}· {r:.1}× above typical{reset}")
+        }
+        _ => format!(" {dim}· typical ~{typical}{reset}"),
+    }
+}
+
 fn run_anomalies(path: Option<PathBuf>, json: bool, exit_code: bool) -> anyhow::Result<ExitCode> {
     let anomalies = match path {
         Some(path) => with_spinner("analyzing", move || {
@@ -811,6 +848,8 @@ fn run_anomalies(path: Option<PathBuf>, json: bool, exit_code: bool) -> anyhow::
         println!("{}", serde_json::to_string_pretty(&anomalies)?);
         return Ok(code);
     }
+
+    let baselines = default_baselines();
 
     let Palette {
         bold,
@@ -847,10 +886,11 @@ fn run_anomalies(path: Option<PathBuf>, json: bool, exit_code: bool) -> anyhow::
                 Severity::Info => (dim, "INFO"),
             };
             println!(
-                "  {color}[{tag}]{reset} {bold}{:>9}{reset}  {}  {dim}in {}{reset}",
+                "  {color}[{tag}]{reset} {bold}{:>9}{reset}  {}  {dim}in {}{reset}{}",
                 human(anomaly.bytes),
                 anomaly.name,
-                anomaly.zone
+                anomaly.zone,
+                baseline_note(&baselines, &anomaly.name, &anomaly.zone, anomaly.bytes)
             );
             println!("      {dim}{}{reset}", anomaly.path.display());
         }
@@ -864,14 +904,114 @@ fn run_anomalies(path: Option<PathBuf>, json: bool, exit_code: bool) -> anyhow::
         );
         for anomaly in &caches {
             println!(
-                "  {green}{:>9}{reset}  {}  {dim}in {}{reset}",
+                "  {green}{:>9}{reset}  {}  {dim}in {}{reset}{}",
                 human(anomaly.bytes),
                 anomaly.name,
-                anomaly.zone
+                anomaly.zone,
+                baseline_note(&baselines, &anomaly.name, &anomaly.zone, anomaly.bytes)
             );
         }
     }
     Ok(code)
+}
+
+fn run_baseline(suggest: bool, json: bool) -> anyhow::Result<ExitCode> {
+    let baselines = default_baselines();
+    let anomalies = with_spinner("measuring zones", || detect_anomalies(&default_zones()));
+
+    let Palette {
+        bold,
+        dim,
+        red,
+        green,
+        cyan,
+        reset,
+        ..
+    } = palette();
+
+    if suggest {
+        let missing: Vec<_> = anomalies
+            .iter()
+            .filter(|a| lookup_baseline(&baselines, &a.name, &a.zone).is_none())
+            .collect();
+        println!(
+            "{dim}# measured on this machine — review, then PR these into baselines.toml{reset}"
+        );
+        if missing.is_empty() {
+            println!("{dim}# every notable folder here already has a baseline{reset}");
+            return Ok(ExitCode::SUCCESS);
+        }
+        for a in missing {
+            println!();
+            println!("[[baseline]]");
+            println!("name = \"{}\"", a.name);
+            println!("zone = \"{}\"", a.zone);
+            println!("typical_mb = {}", a.bytes / (1024 * 1024));
+            println!("observations = 1");
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    let matched: Vec<_> = anomalies
+        .iter()
+        .filter_map(|a| lookup_baseline(&baselines, &a.name, &a.zone).map(|b| (a, b)))
+        .collect();
+
+    if json {
+        let payload: Vec<_> = matched
+            .iter()
+            .map(|(a, b)| {
+                serde_json::json!({
+                    "name": a.name,
+                    "zone": a.zone,
+                    "bytes": a.bytes,
+                    "typical_mb": b.typical_mb,
+                    "observations": b.observations,
+                    "ratio": baseline_ratio(a.bytes, b),
+                    "above_typical": is_above_typical(a.bytes, b),
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    println!(
+        "{bold}deepscan baseline{reset} {dim}· your sizes vs curated typical ({} baseline(s)){reset}",
+        baselines.len()
+    );
+    if baselines.is_empty() {
+        println!(
+            "  {dim}baselines.toml is empty — run `deepscan baseline --suggest` and open a PR to seed it.{reset}"
+        );
+        println!(
+            "  {dim}(baselines are curated over git, never telemetry — deepscan does not phone home){reset}"
+        );
+        return Ok(ExitCode::SUCCESS);
+    }
+    if matched.is_empty() {
+        println!("  {dim}none of your notable folders have a baseline yet{reset}");
+        return Ok(ExitCode::SUCCESS);
+    }
+    for (a, b) in matched {
+        let verdict = match baseline_ratio(a.bytes, b) {
+            Some(r) if is_above_typical(a.bytes, b) => {
+                format!("{red}{r:.1}× above typical{reset}")
+            }
+            Some(r) => format!("{green}normal ({r:.1}×){reset}"),
+            None => format!("{dim}—{reset}"),
+        };
+        println!(
+            "  {:>10}  {cyan}{}{reset} {dim}[{}] · typical ~{} · {} obs{reset} · {}",
+            human(a.bytes),
+            a.name,
+            a.zone,
+            human(b.typical_mb.saturating_mul(1024 * 1024)),
+            b.observations,
+            verdict
+        );
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 fn render_scan(report: &ScanReport) {
