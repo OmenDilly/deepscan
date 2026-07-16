@@ -11,9 +11,11 @@
 #
 # A baseline is a *typical* size; deepscan flags a folder several times above
 # it. A baseline is only as good as its sample — `observations` records how
-# many machines contributed, so a 1-machine entry is treated as the weak
-# evidence it is. When you add to an existing entry, average it in and bump
-# `observations`.
+# many machines contributed. An entry needs MIN_OBSERVATIONS (3) machines
+# before deepscan will let it flag anyone; below that it just accumulates, so
+# contributing a single observation is safe and inert — it can't misjudge
+# someone else's machine. When you add to an existing entry, average it in and
+# bump `observations`.
 #
 # Fields:
 #   name          required  folder name to match (case-insensitive)
@@ -27,7 +29,12 @@
 # Maintainer acceptance rule (the PR review IS the gate):
 #   • Reject any row whose folder `deepscan anomalies` flags on the contributor's
 #     machine — an outlier is not a typical size.
-#   • Prefer entries with observations >= 3 before trusting them to flag others.
+#   • Reject any row not backed by a real, installed app — `deepscan baseline
+#     --suggest` already filters to folders matching an app in /Applications,
+#     but re-check: machine-local scratch and orphaned leftovers of uninstalled
+#     apps are not a typical size for anyone else.
+#   • An entry needs observations >= 3 before deepscan trusts it to flag others
+#     — below that it only accumulates.
 #   • Merging a new machine into an existing entry: average typical_mb in and
 #     bump observations; never overwrite.
 

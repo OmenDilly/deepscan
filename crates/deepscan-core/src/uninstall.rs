@@ -149,6 +149,41 @@ fn find_app(query: &str) -> Option<PathBuf> {
     best.map(|(path, _)| path)
 }
 
+/// Lowercased names **and** bundle ids of every installed app in
+/// `/Applications` and `~/Applications` — the vocabulary a baseline-worthy
+/// folder must match. A folder with no installed app behind it is either a
+/// machine-local artifact or an orphaned leftover; neither is a typical size
+/// for anyone else.
+pub fn installed_app_keys() -> std::collections::HashSet<String> {
+    let mut keys = std::collections::HashSet::new();
+    let mut dirs = vec![PathBuf::from("/Applications")];
+    if let Some(home) = home_dir() {
+        dirs.push(home.join("Applications"));
+    }
+    for dir in dirs {
+        let Ok(read_dir) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in read_dir.filter_map(Result::ok) {
+            let path = entry.path();
+            if !path
+                .extension()
+                .map(|e| e.eq_ignore_ascii_case("app"))
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                keys.insert(stem.to_lowercase());
+            }
+            if let Some(id) = read_bundle_id(&path) {
+                keys.insert(id.to_lowercase());
+            }
+        }
+    }
+    keys
+}
+
 fn read_bundle_id(app: &Path) -> Option<String> {
     let info = app.join("Contents/Info");
     let output = Command::new("defaults")

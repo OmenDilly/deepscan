@@ -22,8 +22,8 @@ pub use anomaly::{
     analyze_container, default_zones, detect_anomalies, zone_children, Anomaly, AnomalyKind, Zone,
 };
 pub use baselines::{
-    baseline_ratio, default_baselines, is_above_typical, load_baselines, lookup_baseline,
-    parse_baselines, Baseline,
+    baseline_ratio, default_baselines, is_above_typical, is_usable, load_baselines,
+    lookup_baseline, parse_baselines, Baseline, MIN_OBSERVATIONS,
 };
 pub use catalog::{default_catalog, evaluate_catalog, CatalogEntry};
 pub use deletion::move_to_trash;
@@ -48,4 +48,4 @@ pub use signatures::{
     default_signatures, evaluate_signatures, load_signatures, parse_signatures, Signature,
 };
 pub use space::{disk_space, local_snapshots, space_report};
-pub use uninstall::{execute_uninstall, plan_uninstall};
+pub use uninstall::{execute_uninstall, installed_app_keys, plan_uninstall};

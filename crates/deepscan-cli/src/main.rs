@@ -12,10 +12,10 @@ use clap::{Parser, Subcommand};
 use deepscan_core::{
     analyze_container, baseline_ratio, build_reclaim_plan, build_report, default_baselines,
     default_signatures, default_zones, detect_anomalies, execute_reclaim, execute_uninstall,
-    find_duplicates, find_large_files, home_dir, human, is_above_typical, load_signatures,
-    lookup_baseline, plan_uninstall, progress, record_and_compare, reset_progress, space_report,
-    zone_children, AnomalyKind, Confidence, DuplicateGroup, ReclaimPlan, ScanReport, Severity,
-    SpaceReport, TreeNode, UninstallPlan,
+    find_duplicates, find_large_files, home_dir, human, installed_app_keys, is_above_typical,
+    load_signatures, lookup_baseline, plan_uninstall, progress, record_and_compare, reset_progress,
+    space_report, zone_children, AnomalyKind, Confidence, DuplicateGroup, ReclaimPlan, ScanReport,
+    Severity, SpaceReport, TreeNode, UninstallPlan,
 };
 
 mod tui;
@@ -961,8 +961,19 @@ fn run_baseline(suggest: bool, json: bool) -> anyhow::Result<ExitCode> {
             anomalies.iter().map(|a| a.path.clone()).collect();
         let population = with_spinner("measuring all zone folders", zone_children);
 
+        let apps = with_spinner("reading installed apps", installed_app_keys);
+        // A folder only deserves a baseline if real software backs it. Match the
+        // app's name or bundle id; allow a prefix so "Google" matches
+        // "Google Chrome", but require 4+ chars so short names can't over-match.
+        let backed_by_app = |name: &str| {
+            let lower = name.to_lowercase();
+            apps.contains(&lower)
+                || (lower.len() >= 4 && apps.iter().any(|k| k.starts_with(&lower)))
+        };
+
         let mut rows = Vec::new();
-        let mut omitted = 0usize;
+        let mut omitted_outlier = 0usize;
+        let mut omitted_no_app = 0usize;
         for (zone, path, bytes) in population {
             if bytes < SUGGEST_FLOOR {
                 continue;
@@ -975,26 +986,30 @@ fn run_baseline(suggest: bool, json: bool) -> anyhow::Result<ExitCode> {
                 continue;
             }
             if outliers.contains(&path) {
-                omitted += 1;
+                omitted_outlier += 1;
+                continue;
+            }
+            if !backed_by_app(&name) {
+                omitted_no_app += 1;
                 continue;
             }
             rows.push((name, zone, bytes));
         }
         rows.sort_by_key(|a| a.0.to_lowercase());
 
-        println!("{dim}# deepscan baseline --suggest — measured on this machine.{reset}");
+        println!("{dim}# deepscan baseline --suggest — one machine's measurements.{reset}");
         println!(
-            "{dim}# These are folders whose size looks TYPICAL here. Review, then PR into{reset}"
+            "{dim}# Each row is an OBSERVATION, not a verdict: a baseline needs {} machines{reset}",
+            deepscan_core::MIN_OBSERVATIONS
         );
-        println!(
-            "{dim}# baselines.toml. If an entry already exists, average yours in and bump{reset}"
-        );
-        println!("{dim}# observations instead of adding a duplicate.{reset}");
-        if omitted > 0 {
-            println!(
-                "{dim}# ({omitted} folder(s) omitted: flagged as outliers on this machine, so they{reset}"
-            );
-            println!("{dim}#  are not typical — that is exactly what a baseline is for.){reset}");
+        println!("{dim}# before it judges anyone, so contributing yours is safe. If an entry already{reset}");
+        println!("{dim}# exists, average yours in and bump observations rather than adding a duplicate.{reset}");
+        if omitted_outlier > 0 {
+            println!("{dim}# ({omitted_outlier} omitted: flagged as outliers here — an outlier is not a typical size.){reset}");
+        }
+        if omitted_no_app > 0 {
+            println!("{dim}# ({omitted_no_app} omitted: no installed app behind them — machine-local scratch or{reset}");
+            println!("{dim}#  leftovers from uninstalled apps; not a typical size for anyone else.){reset}");
         }
         if rows.is_empty() {
             println!("{dim}# nothing to suggest{reset}");
@@ -1044,12 +1059,20 @@ fn run_baseline(suggest: bool, json: bool) -> anyhow::Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
     for (a, b) in matched {
-        let verdict = match baseline_ratio(a.bytes, b) {
-            Some(r) if is_above_typical(a.bytes, b) => {
-                format!("{red}{r:.1}× above typical{reset}")
+        let verdict = if !deepscan_core::is_usable(b) {
+            format!(
+                "{dim}{} of {} obs — accumulating, not yet judging{reset}",
+                b.observations,
+                deepscan_core::MIN_OBSERVATIONS
+            )
+        } else {
+            match baseline_ratio(a.bytes, b) {
+                Some(r) if is_above_typical(a.bytes, b) => {
+                    format!("{red}{r:.1}× above typical{reset}")
+                }
+                Some(r) => format!("{green}normal ({r:.1}×){reset}"),
+                None => format!("{dim}—{reset}"),
             }
-            Some(r) => format!("{green}normal ({r:.1}×){reset}"),
-            None => format!("{dim}—{reset}"),
         };
         println!(
             "  {:>10}  {cyan}{}{reset} {dim}[{}] · typical ~{} · {} obs{reset} · {}",
